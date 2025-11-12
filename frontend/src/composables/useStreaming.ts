@@ -93,6 +93,22 @@ export function useStreaming(userId: string) {
           });
         }
 
+        // Handle file creation
+        else if (data.type === 'file_created' && data.fileName) {
+          const fileCreatedMsg = `📄 Created file: ${data.fileName}`;
+          currentStatus.value = fileCreatedMsg;
+          activities.value.push({
+            type: 'file_created',
+            content: fileCreatedMsg,
+            timestamp: Date.now(),
+            details: {
+              fileName: data.fileName,
+              filePath: data.filePath,
+              fileSize: data.fileSize,
+            },
+          });
+        }
+
         // Handle completion
         else if (data.type === 'message_complete') {
           // Add assistant message to history
