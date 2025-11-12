@@ -50,10 +50,10 @@ Building a full-stack chatbot application powered by Claude Agent SDK with real-
 │                            │                                 │
 │                            ▼                                 │
 │  ┌────────────────────────────────────────────────────┐    │
-│  │          Flat File Storage Layer                   │    │
-│  │  - Conversation History (JSON)                     │    │
-│  │  - User Sessions (JSON)                            │    │
-│  │  - Agent State (JSON)                              │    │
+│  │          Session Tracking (Flat Files)             │    │
+│  │  - User → Session ID Mapping (JSON)                │    │
+│  │  - Session Metadata (JSON)                         │    │
+│  │  Note: Claude SDK manages conversation history     │    │
 │  └────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -82,8 +82,9 @@ Building a full-stack chatbot application powered by Claude Agent SDK with real-
 - **Language**: TypeScript
 - **SDK**: Claude Agent SDK (Anthropic)
 - **Storage**:
-  - File system with JSON files
-  - Directory structure: `/data/sessions/{sessionId}/`
+  - Lightweight session tracking (JSON)
+  - Claude SDK automatically manages conversation history
+  - Only store: user ID → session ID mappings
 
 ### Development Tools
 - **Package Manager**: pnpm (fast, efficient)
@@ -188,107 +189,126 @@ export const useStreaming = (sessionId: string) => {
 #### 2. Claude SDK Integration
 ```typescript
 // agent.service.ts - Core agent logic
-import { Agent } from '@anthropic-ai/sdk-agent';
+import { query } from '@anthropic-ai/claude-agent-sdk';
 
 export class ClaudeAgentService {
-  private agent: Agent;
-
-  constructor() {
-    this.agent = new Agent({
-      apiKey: process.env.ANTHROPIC_API_KEY,
-      model: 'claude-3-5-sonnet-20241022',
-    });
-  }
-
+  /**
+   * Process a chat message using Claude Agent SDK
+   * The SDK automatically manages conversation history via session IDs
+   */
   async processMessage(
-    sessionId: string,
+    sessionId: string | undefined,
     userMessage: string,
     onStream: (delta: string) => void
   ) {
-    // Load conversation history from file
-    const history = await this.loadHistory(sessionId);
-
-    // Send to Claude SDK with streaming
-    const response = await this.agent.chat({
-      messages: [...history, { role: 'user', content: userMessage }],
-      stream: true,
+    // Use Claude Agent SDK's built-in session management
+    const response = query({
+      prompt: userMessage,
+      options: {
+        resume: sessionId,  // SDK loads history automatically
+        model: 'claude-sonnet-4-5'
+      }
     });
 
-    // Handle streaming response
+    let newSessionId: string | undefined;
     let fullResponse = '';
-    for await (const chunk of response) {
-      if (chunk.type === 'content_block_delta') {
-        fullResponse += chunk.delta.text;
-        onStream(chunk.delta.text);
+
+    // Stream response chunks
+    for await (const message of response) {
+      // Capture session ID from init message
+      if (message.type === 'system' && message.subtype === 'init') {
+        newSessionId = message.session_id;
+      }
+
+      // Stream assistant messages
+      if (message.type === 'assistant') {
+        const content = message.message.content;
+        if (Array.isArray(content)) {
+          for (const block of content) {
+            if (block.type === 'text') {
+              fullResponse += block.text;
+              onStream(block.text);
+            }
+          }
+        }
       }
     }
 
-    // Save to file storage
-    await this.saveMessage(sessionId, userMessage, fullResponse);
-
-    return fullResponse;
-  }
-
-  private async loadHistory(sessionId: string) {
-    // Load from flat file
-    return StorageService.loadConversation(sessionId);
-  }
-
-  private async saveMessage(sessionId: string, user: string, assistant: string) {
-    // Save to flat file
-    await StorageService.appendMessages(sessionId, [
-      { role: 'user', content: user, timestamp: Date.now() },
-      { role: 'assistant', content: assistant, timestamp: Date.now() }
-    ]);
+    return { sessionId: newSessionId, response: fullResponse };
   }
 }
 ```
 
-#### 3. Storage Layer (Flat Files)
+#### 3. Session Tracking (Simplified Storage)
 ```typescript
-// storage.service.ts
+// storage.service.ts - Lightweight session management
 import fs from 'fs/promises';
 import path from 'path';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
+const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
+
+interface UserSession {
+  userId: string;
+  sessionId: string;  // Claude SDK session ID
+  createdAt: number;
+  lastActivity: number;
+}
 
 export class StorageService {
-  static async loadConversation(sessionId: string) {
-    const filePath = path.join(DATA_DIR, 'sessions', sessionId, 'messages.json');
+  /**
+   * Get Claude session ID for a user
+   * Returns undefined if no active session
+   */
+  static async getUserSession(userId: string): Promise<string | undefined> {
+    const sessions = await this.loadSessions();
+    const userSession = sessions.find(s => s.userId === userId);
+    return userSession?.sessionId;
+  }
 
+  /**
+   * Create or update user session mapping
+   */
+  static async saveUserSession(userId: string, sessionId: string): Promise<void> {
+    const sessions = await this.loadSessions();
+    const existingIndex = sessions.findIndex(s => s.userId === userId);
+
+    const sessionData: UserSession = {
+      userId,
+      sessionId,
+      createdAt: existingIndex >= 0 ? sessions[existingIndex].createdAt : Date.now(),
+      lastActivity: Date.now()
+    };
+
+    if (existingIndex >= 0) {
+      sessions[existingIndex] = sessionData;
+    } else {
+      sessions.push(sessionData);
+    }
+
+    await this.saveSessions(sessions);
+  }
+
+  /**
+   * Load all sessions from file
+   */
+  private static async loadSessions(): Promise<UserSession[]> {
     try {
-      const data = await fs.readFile(filePath, 'utf-8');
+      const data = await fs.readFile(SESSIONS_FILE, 'utf-8');
       return JSON.parse(data);
     } catch (error) {
-      // Create new session file
-      await this.initializeSession(sessionId);
+      // File doesn't exist, create it
+      await fs.mkdir(DATA_DIR, { recursive: true });
+      await fs.writeFile(SESSIONS_FILE, JSON.stringify([], null, 2));
       return [];
     }
   }
 
-  static async appendMessages(sessionId: string, messages: Message[]) {
-    const filePath = path.join(DATA_DIR, 'sessions', sessionId, 'messages.json');
-    const existing = await this.loadConversation(sessionId);
-    const updated = [...existing, ...messages];
-
-    await fs.writeFile(filePath, JSON.stringify(updated, null, 2));
-  }
-
-  static async initializeSession(sessionId: string) {
-    const sessionDir = path.join(DATA_DIR, 'sessions', sessionId);
-    await fs.mkdir(sessionDir, { recursive: true });
-    await fs.writeFile(
-      path.join(sessionDir, 'messages.json'),
-      JSON.stringify([], null, 2)
-    );
-    await fs.writeFile(
-      path.join(sessionDir, 'metadata.json'),
-      JSON.stringify({
-        id: sessionId,
-        createdAt: Date.now(),
-        lastActivity: Date.now()
-      }, null, 2)
-    );
+  /**
+   * Save sessions to file
+   */
+  private static async saveSessions(sessions: UserSession[]): Promise<void> {
+    await fs.writeFile(SESSIONS_FILE, JSON.stringify(sessions, null, 2));
   }
 }
 ```
@@ -297,11 +317,15 @@ export class StorageService {
 ```typescript
 // chat.routes.ts
 import { FastifyInstance } from 'fastify';
+import { ClaudeAgentService } from '../services/agent.service.js';
+import { StorageService } from '../services/storage.service.js';
 
 export async function chatRoutes(fastify: FastifyInstance) {
+  const agentService = new ClaudeAgentService();
+
   // SSE streaming endpoint
   fastify.get('/chat/stream', async (request, reply) => {
-    const { sessionId, message } = request.query;
+    const { userId, message } = request.query;
 
     reply.raw.writeHead(200, {
       'Content-Type': 'text/event-stream',
@@ -317,16 +341,26 @@ export async function chatRoutes(fastify: FastifyInstance) {
     };
 
     try {
-      const response = await agentService.processMessage(
-        sessionId,
+      // Get existing session ID for this user (if any)
+      const existingSessionId = await StorageService.getUserSession(userId);
+
+      // Process message - SDK handles history via session ID
+      const result = await agentService.processMessage(
+        existingSessionId,
         message,
         onStream
       );
 
-      // Send completion event
+      // Save new/updated session ID
+      if (result.sessionId) {
+        await StorageService.saveUserSession(userId, result.sessionId);
+      }
+
+      // Send completion event with session ID
       reply.raw.write(`data: ${JSON.stringify({
         type: 'message_complete',
-        message: { role: 'assistant', content: response }
+        sessionId: result.sessionId,
+        message: { role: 'assistant', content: result.response }
       })}\n\n`);
 
       reply.raw.end();
@@ -339,10 +373,11 @@ export async function chatRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // Get conversation history
-  fastify.get('/chat/history/:sessionId', async (request) => {
-    const { sessionId } = request.params;
-    return StorageService.loadConversation(sessionId);
+  // Get user session info
+  fastify.get('/session/:userId', async (request) => {
+    const { userId } = request.params;
+    const sessionId = await StorageService.getUserSession(userId);
+    return { userId, sessionId, hasSession: !!sessionId };
   });
 }
 ```
@@ -351,56 +386,54 @@ export async function chatRoutes(fastify: FastifyInstance) {
 
 ## Data Models
 
-### Message
+### UserSession (Simplified)
 ```typescript
-interface Message {
-  role: 'user' | 'assistant' | 'system';
+interface UserSession {
+  userId: string;              // Your application's user ID
+  sessionId: string;           // Claude SDK session ID
+  createdAt: number;           // Timestamp when session created
+  lastActivity: number;        // Last message timestamp
+}
+```
+
+### Message (Frontend Display Only)
+```typescript
+// Optional: For client-side message display
+interface DisplayMessage {
+  role: 'user' | 'assistant';
   content: string;
   timestamp: number;
-  id?: string;
-  metadata?: Record<string, any>;
 }
 ```
 
-### Conversation
-```typescript
-interface Conversation {
-  sessionId: string;
-  messages: Message[];
-  createdAt: number;
-  lastActivity: number;
-  metadata?: {
-    userAgent?: string;
-    ipAddress?: string;
-  };
-}
+**Note**: Conversation history is stored automatically by Claude Agent SDK in:
 ```
-
-### Session
-```typescript
-interface Session {
-  id: string;
-  createdAt: number;
-  lastActivity: number;
-  messageCount: number;
-}
+~/.claude/projects/{project-slug}/{session-id}.jsonl
 ```
+You don't need to manage this storage yourself.
 
 ---
 
-## File Storage Structure
+## File Storage Structure (Simplified)
 
 ```
 /data
-├── sessions/
-│   ├── session-abc123/
-│   │   ├── messages.json       # Conversation history
-│   │   └── metadata.json       # Session metadata
-│   ├── session-def456/
-│   │   ├── messages.json
-│   │   └── metadata.json
-│   └── ...
-└── sessions.index.json         # Quick lookup of all sessions
+└── sessions.json               # User → Claude Session ID mappings
+
+# Example sessions.json content:
+[
+  {
+    "userId": "user-123",
+    "sessionId": "claude-session-abc-456",
+    "createdAt": 1704067200000,
+    "lastActivity": 1704153600000
+  }
+]
+```
+
+**Conversation History**: Automatically managed by Claude SDK at:
+```
+~/.claude/projects/{project-slug}/{session-id}.jsonl
 ```
 
 ---
@@ -410,15 +443,13 @@ interface Session {
 ### Endpoints
 
 #### Chat Operations
-- `GET /api/chat/stream?sessionId={id}&message={text}` - Stream chat response (SSE)
-- `GET /api/chat/history/:sessionId` - Get conversation history
-- `POST /api/chat/message` - Send message (non-streaming fallback)
+- `GET /api/chat/stream?userId={id}&message={text}` - Stream chat response (SSE)
+  - Automatically resumes conversation using stored session ID
+  - Returns new session ID on first interaction
 
 #### Session Management
-- `POST /api/session/create` - Create new session
-- `GET /api/session/:sessionId` - Get session details
-- `GET /api/sessions` - List all sessions
-- `DELETE /api/session/:sessionId` - Delete session
+- `GET /api/session/:userId` - Get user's session info
+- `DELETE /api/session/:userId` - Clear user's session (start new conversation)
 
 #### Health/Status
 - `GET /api/health` - Server health check
@@ -448,7 +479,7 @@ pnpm add -w typescript @types/node tsx
 # Backend dependencies
 cd backend
 pnpm add fastify @fastify/cors
-pnpm add @anthropic-ai/sdk-agent
+pnpm add @anthropic-ai/claude-agent-sdk
 pnpm add -D @types/node tsx nodemon
 
 # Frontend dependencies
@@ -505,15 +536,15 @@ VITE_API_URL=http://localhost:8000
 - [ ] Setup monorepo structure
 - [ ] Initialize Vue 3 + Vite frontend
 - [ ] Initialize Fastify backend with Node.js 21+
-- [ ] Integrate Claude Agent SDK
-- [ ] Implement flat file storage
+- [ ] Integrate Claude Agent SDK with session management
+- [ ] Implement user → session ID tracking (simple JSON file)
 - [ ] Create basic chat UI
 - [ ] Implement SSE streaming
-- [ ] Basic session management
+- [ ] Test conversation continuity across page refreshes
 
 ### Phase 2: Enhancement
-- [ ] Add conversation history UI
-- [ ] Implement session persistence
+- [ ] Add client-side message display (track messages for UI)
+- [ ] Implement "New Conversation" feature (clear session ID)
 - [ ] Add error handling & retries
 - [ ] Improve streaming performance
 - [ ] Add loading states & animations
@@ -521,12 +552,12 @@ VITE_API_URL=http://localhost:8000
 - [ ] Add code syntax highlighting
 
 ### Phase 3: Advanced Features
-- [ ] Multi-session support (tabs/sidebar)
-- [ ] Export conversations
-- [ ] Search conversation history
+- [ ] Multi-session support per user (session list)
+- [ ] Export conversations (parse Claude's JSONL files)
 - [ ] Agent tools/function calling UI
-- [ ] Conversation branching/editing
+- [ ] Conversation forking (use forkSession option)
 - [ ] Response regeneration
+- [ ] User authentication
 
 ### Phase 4: Production Ready (Future)
 - [ ] Migrate to database (PostgreSQL/SQLite)
@@ -577,19 +608,27 @@ VITE_API_URL=http://localhost:8000
 - Excellent SSE/streaming support
 - Growing ecosystem
 
-### 4. Storage: Flat Files vs Database
-**Decision: Flat Files (Phase 1)**
+### 4. Storage: Minimal Tracking
+**Decision: Simple JSON file for user → session mapping**
 
 **Rationale:**
-- Simpler initial implementation
-- No database setup/maintenance
-- Easy to inspect and debug
-- Sufficient for MVP/testing
-- Easy migration path to database later
+- Claude Agent SDK handles conversation history automatically
+- Only need to track: which user is using which Claude session
+- Minimal storage = simpler code, fewer bugs
+- Easy to migrate to database later if needed
 
-**Migration plan:**
-- Phase 4: Move to SQLite (single file, no server)
-- Future: PostgreSQL for production scale
+**What we DON'T store:**
+- ❌ Conversation messages (SDK stores this)
+- ❌ Message history (SDK manages this)
+- ❌ Complex conversation state (SDK handles this)
+
+**What we DO store:**
+- ✅ User ID → Claude Session ID mapping
+- ✅ Session metadata (created date, last activity)
+
+**Migration plan (if needed):**
+- Phase 4: Move to SQLite/PostgreSQL for multi-session support
+- Future: Add user authentication and session management
 
 ---
 

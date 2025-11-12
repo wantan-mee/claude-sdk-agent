@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Full-stack chatbot application powered by Claude Agent SDK with real-time streaming capabilities. Built as a monorepo with Vue 3 + Vite frontend and Fastify backend (Node.js 21+) using flat file storage.
+Full-stack chatbot application powered by Claude Agent SDK with real-time streaming capabilities. Built as a monorepo with Vue 3 + Vite frontend and Fastify backend (Node.js 21+). Claude SDK automatically manages conversation history via session IDs.
 
 ## Repository Structure
 
@@ -13,7 +13,7 @@ claude-sdk-agent/
 ├── frontend/          # Vue 3 + Vite with TypeScript
 ├── backend/           # Fastify server (Node.js 21+) with Claude Agent SDK
 ├── shared/            # Shared TypeScript types and utilities
-└── data/              # Flat file storage (sessions, conversations)
+└── data/              # User session tracking (single JSON file)
 ```
 
 ## Development Commands
@@ -85,13 +85,13 @@ pnpm type-check
 ```
 User → Frontend (Vue 3 + Vite)
        ↓
-       SSE Connection (/api/chat/stream)
+       SSE Connection (/api/chat/stream?userId=X)
        ↓
      Backend (Fastify + Node.js 21+)
        ↓
-     Claude Agent SDK (streaming)
+     Claude Agent SDK (streaming + auto history)
        ↓
-     Flat File Storage (/data/sessions/)
+     Session Tracking (/data/sessions.json)
 ```
 
 ### Key Components
@@ -111,23 +111,22 @@ User → Frontend (Vue 3 + Vite)
 **Backend (`/backend`)**
 - **Runtime**: Node.js 21+
 - **Framework**: Fastify with TypeScript
-- **Claude Integration**: `@anthropic-ai/sdk-agent` package
+- **Claude Integration**: `@anthropic-ai/claude-agent-sdk` package
 - **Streaming**: SSE implementation in chat routes
-- **Storage**: JSON flat files in `/data/sessions/{sessionId}/`
+- **Storage**: Simple JSON file for user → session ID mappings
 - **Key Files**:
   - `src/index.ts` - Server entry point
-  - `src/services/agent.service.ts` - Claude SDK integration
-  - `src/services/storage.service.ts` - File I/O operations
+  - `src/services/agent.service.ts` - Claude SDK integration with `resume` option
+  - `src/services/storage.service.ts` - Session ID tracking
   - `src/routes/chat.routes.ts` - SSE streaming endpoints
 
 **Storage Structure** (`/data`)
 ```
 data/
-├── sessions/
-│   └── {sessionId}/
-│       ├── messages.json     # Conversation history
-│       └── metadata.json     # Session metadata
-└── sessions.index.json       # Quick session lookup
+└── sessions.json          # User → Claude Session ID mappings
+
+# Claude SDK automatically stores conversation history at:
+~/.claude/projects/{project-slug}/{session-id}.jsonl
 ```
 
 ## Critical Patterns & Conventions
@@ -184,38 +183,82 @@ reply.raw.write(`data: ${JSON.stringify(payload)}\n\n`);
 ### Claude Agent SDK Usage
 
 ```typescript
-// Initialize agent
-const agent = new Agent({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-  model: 'claude-3-5-sonnet-20241022',
+import { query } from '@anthropic-ai/claude-agent-sdk';
+
+// Stream responses with automatic history management
+const response = query({
+  prompt: userMessage,
+  options: {
+    resume: sessionId,  // SDK automatically loads conversation history
+    model: 'claude-sonnet-4-5'
+  }
 });
 
-// Stream responses
-const response = await agent.chat({
-  messages: conversationHistory,
-  stream: true,
-});
+let newSessionId: string | undefined;
 
-// Process streaming chunks
-for await (const chunk of response) {
-  if (chunk.type === 'content_block_delta') {
-    onStream(chunk.delta.text);
+// Process streaming messages
+for await (const message of response) {
+  // Capture session ID on first message
+  if (message.type === 'system' && message.subtype === 'init') {
+    newSessionId = message.session_id;
+  }
+
+  // Stream assistant responses
+  if (message.type === 'assistant') {
+    const content = message.message.content;
+    if (Array.isArray(content)) {
+      for (const block of content) {
+        if (block.type === 'text') {
+          onStream(block.text);
+        }
+      }
+    }
   }
 }
+
+// Save session ID for next interaction
+await saveUserSession(userId, newSessionId);
 ```
 
-### File Storage Operations
+### Session Tracking Operations
 
 ```typescript
-// Always use async file operations
-await fs.readFile(filePath, 'utf-8');
-await fs.writeFile(filePath, data);
+// storage.service.ts - Simplified session management
+import fs from 'fs/promises';
 
-// Create directories recursively
-await fs.mkdir(sessionDir, { recursive: true });
+interface UserSession {
+  userId: string;
+  sessionId: string;  // Claude SDK session ID
+  createdAt: number;
+  lastActivity: number;
+}
 
-// Path validation - prevent directory traversal
-const safePath = path.join(DATA_DIR, path.normalize(sessionId).replace(/^(\.\.(\/|\\|$))+/, ''));
+// Get user's Claude session ID
+static async getUserSession(userId: string): Promise<string | undefined> {
+  const sessions = await this.loadSessions();
+  return sessions.find(s => s.userId === userId)?.sessionId;
+}
+
+// Save/update user session mapping
+static async saveUserSession(userId: string, sessionId: string): Promise<void> {
+  const sessions = await this.loadSessions();
+  const existingIndex = sessions.findIndex(s => s.userId === userId);
+
+  const sessionData: UserSession = {
+    userId,
+    sessionId,
+    createdAt: existingIndex >= 0 ? sessions[existingIndex].createdAt : Date.now(),
+    lastActivity: Date.now()
+  };
+
+  if (existingIndex >= 0) {
+    sessions[existingIndex] = sessionData;
+  } else {
+    sessions.push(sessionData);
+  }
+
+  await fs.writeFile(SESSIONS_FILE, JSON.stringify(sessions, null, 2));
+}
 ```
 
 ## Important Technical Decisions
@@ -225,13 +268,12 @@ const safePath = path.join(DATA_DIR, path.normalize(sessionId).replace(/^(\.\.(\
 - **Trade-off**: Not suitable for client → server real-time updates
 - **Alternative**: Consider WebSocket if bidirectional real-time communication is needed
 
-### 2. Storage: Flat Files (JSON)
-- **Current**: Simple JSON files in `/data/sessions/`
-- **Why**: No database setup, easy debugging, sufficient for MVP
-- **Migration Path**: SQLite → PostgreSQL when scaling needed
-- **Considerations**:
-  - No concurrent write protection (add file locking if multiple backend instances)
-  - No query optimization (add indexing/caching if performance issues)
+### 2. Storage: Minimal Session Tracking
+- **Current**: Single JSON file mapping users to Claude session IDs
+- **Why**: Claude SDK manages conversation history automatically
+- **What We Store**: Only user ID → session ID mappings
+- **What SDK Stores**: Complete conversation history in `~/.claude/projects/`
+- **Migration Path**: Add database only if you need multi-session support per user
 
 ### 3. Monorepo: pnpm Workspaces
 - **Why**: Shared types, unified dependency management, simpler deployment
@@ -278,19 +320,38 @@ VITE_API_URL=http://localhost:8000  # Backend API URL
 4. Use Composition API with `<script setup lang="ts">`
 5. Write component tests with Vitest + Vue Test Utils
 
-### Modifying Storage Structure
-1. Update types in `/shared/types/`
-2. Create migration utility in `/backend/src/utils/migration.ts`
-3. Update `StorageService` methods
-4. Test with existing data files
-5. Document changes in PLANNING.md
+### Implementing "New Conversation" Feature
+1. Clear user's session ID: `await StorageService.saveUserSession(userId, '')`
+2. Next message will create a new Claude session automatically
+3. Previous conversation remains in Claude's storage (can be accessed via old session ID)
 
-### Adding Agent Tools/Functions
-1. Define tool schema in `/backend/src/services/agent.service.ts`
-2. Implement tool handler function
-3. Register tool with Claude Agent SDK
-4. Update frontend to display tool usage
-5. Add error handling for tool failures
+### Accessing Conversation History
+**Note**: Claude SDK manages history internally. To display history in UI:
+
+**Option 1 - Client-side tracking (recommended)**:
+```typescript
+// Frontend tracks messages as they stream for display purposes
+const messages = ref<DisplayMessage[]>([]);
+
+for await (const message of response) {
+  if (message.type === 'assistant') {
+    messages.value.push({
+      role: 'assistant',
+      content: extractContent(message),
+      timestamp: Date.now()
+    });
+  }
+}
+
+// Store in localStorage for persistence
+localStorage.setItem(`messages-${userId}`, JSON.stringify(messages.value));
+```
+
+**Option 2 - Parse Claude's JSONL files (advanced)**:
+```typescript
+// Read ~/.claude/projects/{project-slug}/{session-id}.jsonl
+// Not recommended: undocumented format, may change
+```
 
 ## Testing Guidelines
 
@@ -328,13 +389,15 @@ const response = await request(app)
 ### Backend Debugging
 - **Logs**: Check console output for service logs
 - **SSE**: Test endpoints with `curl` or tools like `websocat`
-- **File Storage**: Inspect `/data/sessions/` directory for stored data
+- **Session Tracking**: Inspect `/data/sessions.json` for user → session mappings
+- **Claude History**: Check `~/.claude/projects/` for conversation JSONL files
 - **Claude SDK**: Enable debug logging with `DEBUG=anthropic:*`
 
 ### Common Issues
 - **CORS errors**: Check `FRONTEND_URL` in backend `.env`
 - **SSE not connecting**: Verify proper headers in streaming endpoint
-- **File not found**: Ensure `DATA_DIR` exists and has write permissions
+- **Session not persisting**: Check if session ID is being saved correctly in `sessions.json`
+- **History not loading**: Verify `resume` option is passed to Claude SDK with correct session ID
 - **API key issues**: Verify `ANTHROPIC_API_KEY` is valid and not expired
 
 ## Performance Optimization
@@ -353,10 +416,10 @@ const response = await request(app)
 - Use async file I/O operations
 
 ### Storage
-- Keep index file for quick session lookup
-- Archive old sessions (>30 days inactive)
-- Implement pagination for message history
-- Consider compression for large conversations
+- Minimal overhead: just a single JSON file with session mappings
+- Claude SDK handles conversation storage efficiently
+- Optionally clean up old session mappings (>30 days inactive)
+- No need for pagination - SDK handles large conversations automatically
 
 ## Security Considerations
 
@@ -372,28 +435,30 @@ const response = await request(app)
 - Add request validation with JSON schemas
 - Consider encrypting stored conversations
 
-## Migration Path to Database
+## Storage Considerations
 
-When scaling beyond flat files:
+### Current Approach (Recommended for MVP)
+- Single JSON file stores user → session ID mappings
+- Claude SDK handles all conversation history automatically
+- Simple, reliable, no database needed
 
-1. **Phase 1**: Add SQLite (single-file database, minimal setup)
-   - Keep file-based interface, swap storage backend
-   - No infrastructure changes needed
+### When to Add a Database
+Consider migrating to database only if you need:
+- **Multi-session per user**: Users managing multiple conversation threads
+- **User authentication**: Secure user accounts and permissions
+- **Session metadata search**: Find conversations by date, topic, etc.
+- **Team/organization features**: Shared workspaces, collaboration
 
-2. **Phase 2**: PostgreSQL for production
-   - Better concurrency support
-   - Full-text search capabilities
-   - Better performance at scale
-
-3. **Migration Strategy**:
-   - Create database schema matching current JSON structure
-   - Write migration script to import existing files
-   - Update `StorageService` to use database queries
-   - Keep same API interface for backward compatibility
+### Migration Strategy (If Needed)
+1. Keep Claude SDK session management (don't store messages in DB)
+2. Add database table: `user_sessions(user_id, session_id, title, created_at)`
+3. Update `StorageService` to use database queries
+4. Claude SDK continues managing conversation history automatically
 
 ## Resources
 
-- **Claude Agent SDK**: [Documentation Link]
+- **Claude Agent SDK**: https://docs.claude.com/en/api/agent-sdk/overview
+- **Claude Agent SDK (GitHub)**: https://github.com/anthropics/claude-agent-sdk-typescript
 - **Vue 3 Documentation**: https://vuejs.org/
 - **Vite Documentation**: https://vitejs.dev/
 - **Server-Sent Events**: https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events
