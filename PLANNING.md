@@ -20,7 +20,7 @@ Building a full-stack chatbot application powered by Claude Agent SDK with real-
 ┌─────────────────────────────────────────────────────────────┐
 │                         Frontend                             │
 │  ┌────────────────────────────────────────────────────┐    │
-│  │          Next.js 14+ (App Router)                  │    │
+│  │          Vue 3 + Vite + TypeScript                 │    │
 │  │  - Chat UI Components                              │    │
 │  │  - Streaming Message Handler                       │    │
 │  │  - Real-time Updates (SSE/WebSocket)              │    │
@@ -34,7 +34,7 @@ Building a full-stack chatbot application powered by Claude Agent SDK with real-
 ┌─────────────────────────────────────────────────────────────┐
 │                         Backend                              │
 │  ┌────────────────────────────────────────────────────┐    │
-│  │        Node.js Server (Express/Fastify)            │    │
+│  │        Node.js 21+ Server (Fastify)                │    │
 │  │  - REST API Endpoints                              │    │
 │  │  - Streaming Response Handler                      │    │
 │  │  - Session Management                              │    │
@@ -63,22 +63,22 @@ Building a full-stack chatbot application powered by Claude Agent SDK with real-
 ## Technology Stack
 
 ### Frontend
-- **Framework**: Next.js 14+ (App Router)
-  - Why: Native streaming support, Server Components, excellent DX
+- **Framework**: Vue 3 (Composition API)
+  - Why: Lightweight, excellent TypeScript support, reactive system ideal for real-time updates
+- **Build Tool**: Vite
+  - Why: Blazing fast dev server, optimized builds, first-class Vue support
 - **Language**: TypeScript
-- **UI Library**: React 18+
 - **Styling**: Tailwind CSS (fast, modern, responsive)
+- **State Management**: Pinia (optional, may use composables instead)
 - **Streaming**:
   - Option 1: Server-Sent Events (SSE) - simpler, HTTP-based
   - Option 2: WebSockets - bidirectional, more complex
   - **Recommendation**: Start with SSE for simplicity
 
 ### Backend
-- **Runtime**: Node.js 18+
-- **Framework**: Express or Fastify
-  - Express: More familiar, extensive ecosystem
-  - Fastify: Better performance, native TypeScript support
-  - **Recommendation**: Fastify for performance + TS
+- **Runtime**: Node.js 21+
+- **Framework**: Fastify
+  - Why: Better performance, native TypeScript support, excellent SSE/streaming
 - **Language**: TypeScript
 - **SDK**: Claude Agent SDK (Anthropic)
 - **Storage**:
@@ -99,32 +99,41 @@ Building a full-stack chatbot application powered by Claude Agent SDK with real-
 
 #### 1. Chat Interface
 ```
-/frontend/app
-├── page.tsx                    # Main chat page
+/frontend/src
+├── App.vue                     # Main app component
+├── views/
+│   └── ChatView.vue            # Main chat page
 ├── components/
-│   ├── ChatContainer.tsx       # Main chat wrapper
-│   ├── MessageList.tsx         # Scrollable message list
-│   ├── Message.tsx             # Individual message component
-│   ├── StreamingMessage.tsx    # Real-time streaming message
-│   ├── InputBox.tsx            # User input textarea
-│   └── TypingIndicator.tsx     # Loading/streaming indicator
-├── hooks/
-│   ├── useChat.ts              # Chat logic hook
-│   ├── useStreaming.ts         # SSE/WebSocket connection
+│   ├── ChatContainer.vue       # Main chat wrapper
+│   ├── MessageList.vue         # Scrollable message list
+│   ├── Message.vue             # Individual message component
+│   ├── StreamingMessage.vue    # Real-time streaming message
+│   ├── InputBox.vue            # User input textarea
+│   └── TypingIndicator.vue     # Loading/streaming indicator
+├── composables/
+│   ├── useChat.ts              # Chat logic composable
+│   ├── useStreaming.ts         # SSE connection composable
 │   └── useConversation.ts      # Conversation state management
-└── lib/
-    ├── api-client.ts           # Backend API client
-    └── types.ts                # Shared TypeScript types
+├── services/
+│   └── api-client.ts           # Backend API client
+└── types/
+    └── index.ts                # TypeScript type definitions
 ```
 
 #### 2. Streaming Implementation (Frontend)
 ```typescript
-// Approach: Server-Sent Events (SSE)
-const useStreaming = (sessionId: string) => {
-  const [messages, setMessages] = useState([]);
-  const [streamingContent, setStreamingContent] = useState('');
+// composables/useStreaming.ts - Vue 3 Composition API
+import { ref } from 'vue';
+
+export const useStreaming = (sessionId: string) => {
+  const messages = ref([]);
+  const streamingContent = ref('');
+  const isStreaming = ref(false);
 
   const sendMessage = async (content: string) => {
+    isStreaming.value = true;
+    streamingContent.value = '';
+
     const eventSource = new EventSource(
       `/api/chat/stream?sessionId=${sessionId}&message=${encodeURIComponent(content)}`
     );
@@ -133,19 +142,22 @@ const useStreaming = (sessionId: string) => {
       const data = JSON.parse(event.data);
 
       if (data.type === 'content_delta') {
-        setStreamingContent(prev => prev + data.delta);
+        streamingContent.value += data.delta;
       } else if (data.type === 'message_complete') {
-        setMessages(prev => [...prev, data.message]);
-        setStreamingContent('');
+        messages.value.push(data.message);
+        streamingContent.value = '';
+        isStreaming.value = false;
+        eventSource.close();
       }
     };
 
     eventSource.onerror = () => {
+      isStreaming.value = false;
       eventSource.close();
     };
   };
 
-  return { messages, streamingContent, sendMessage };
+  return { messages, streamingContent, isStreaming, sendMessage };
 };
 ```
 
@@ -424,8 +436,8 @@ pnpm init
 # Create workspace structure
 mkdir -p frontend backend shared
 
-# Initialize Next.js frontend
-cd frontend && pnpm create next-app@latest . --typescript --tailwind --app
+# Initialize Vue + Vite frontend
+cd frontend && pnpm create vite@latest . --template vue-ts
 
 # Initialize backend
 cd ../backend && pnpm init
@@ -441,7 +453,9 @@ pnpm add -D @types/node tsx nodemon
 
 # Frontend dependencies
 cd ../frontend
-pnpm add eventsource-parser
+pnpm add vue-router pinia
+pnpm add -D tailwindcss postcss autoprefixer
+npx tailwindcss init -p
 ```
 
 ### Build & Run Commands
@@ -450,7 +464,7 @@ pnpm add eventsource-parser
 pnpm dev              # Run both frontend + backend concurrently
 
 # Individual services
-pnpm dev:frontend     # Next.js dev server (port 3000)
+pnpm dev:frontend     # Vite dev server (port 5173)
 pnpm dev:backend      # Backend dev server (port 8000)
 
 # Production build
@@ -475,12 +489,12 @@ ANTHROPIC_API_KEY=sk-ant-...
 PORT=8000
 NODE_ENV=development
 DATA_DIR=./data
-FRONTEND_URL=http://localhost:3000
+FRONTEND_URL=http://localhost:5173
 ```
 
-**Frontend (.env.local)**
+**Frontend (.env)**
 ```bash
-NEXT_PUBLIC_API_URL=http://localhost:8000
+VITE_API_URL=http://localhost:8000
 ```
 
 ---
@@ -489,8 +503,8 @@ NEXT_PUBLIC_API_URL=http://localhost:8000
 
 ### Phase 1: Foundation (MVP)
 - [ ] Setup monorepo structure
-- [ ] Initialize Next.js frontend
-- [ ] Initialize Fastify backend
+- [ ] Initialize Vue 3 + Vite frontend
+- [ ] Initialize Fastify backend with Node.js 21+
 - [ ] Integrate Claude Agent SDK
 - [ ] Implement flat file storage
 - [ ] Create basic chat UI
@@ -582,11 +596,11 @@ NEXT_PUBLIC_API_URL=http://localhost:8000
 ## Performance Considerations
 
 ### Frontend
-- React Server Components for initial render
-- Client-side state for real-time updates
-- Virtualized message list for long conversations
-- Optimistic UI updates
-- Debounced input handling
+- Vue 3 reactivity system for efficient updates
+- Virtual scrolling for long message lists (vue-virtual-scroller)
+- Optimistic UI updates with reactive refs
+- Debounced input handling (VueUse utilities)
+- Keep-alive for component caching
 
 ### Backend
 - Connection pooling (when adding DB)
@@ -625,9 +639,9 @@ NEXT_PUBLIC_API_URL=http://localhost:8000
 ## Testing Strategy
 
 ### Frontend Tests
-- Component unit tests (Jest + React Testing Library)
+- Component unit tests (Vitest + Vue Test Utils)
 - Integration tests for chat flow
-- E2E tests (Playwright)
+- E2E tests (Playwright or Cypress)
 - Streaming behavior tests
 
 ### Backend Tests
@@ -693,6 +707,8 @@ NEXT_PUBLIC_API_URL=http://localhost:8000
 ## References
 
 - Claude Agent SDK Documentation: [To be added]
-- Next.js Streaming: https://nextjs.org/docs/app/building-your-application/routing/loading-ui-and-streaming
+- Vue 3 Documentation: https://vuejs.org/
+- Vite Documentation: https://vitejs.dev/
 - Server-Sent Events: https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events
 - Fastify Documentation: https://fastify.dev/
+- Node.js 21 Documentation: https://nodejs.org/docs/latest-v21.x/api/
