@@ -4,41 +4,59 @@ import { config } from '../config/env.js';
 
 const SESSIONS_FILE = path.join(config.dataDir, 'sessions.json');
 
+export interface Message {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: number;
+}
+
 export interface UserSession {
   userId: string;
-  sessionId: string;
+  conversationHistory: Message[];
   createdAt: number;
   lastActivity: number;
 }
 
 export class StorageService {
   /**
-   * Get Claude session ID for a user
-   * Returns undefined if no active session
+   * Get conversation history for a user
+   * Returns empty array if no active session
    */
-  static async getUserSession(userId: string): Promise<string | undefined> {
+  static async getUserConversation(userId: string): Promise<Message[]> {
     const sessions = await this.loadSessions();
     const userSession = sessions.find((s) => s.userId === userId);
-    return userSession?.sessionId;
+    return userSession?.conversationHistory || [];
   }
 
   /**
-   * Create or update user session mapping
+   * Add a message to user's conversation history
    */
-  static async saveUserSession(userId: string, sessionId: string): Promise<void> {
+  static async addMessage(
+    userId: string,
+    role: 'user' | 'assistant',
+    content: string
+  ): Promise<void> {
     const sessions = await this.loadSessions();
     const existingIndex = sessions.findIndex((s) => s.userId === userId);
 
-    const sessionData: UserSession = {
-      userId,
-      sessionId,
-      createdAt: existingIndex >= 0 ? sessions[existingIndex].createdAt : Date.now(),
-      lastActivity: Date.now(),
+    const newMessage: Message = {
+      role,
+      content,
+      timestamp: Date.now(),
     };
 
     if (existingIndex >= 0) {
-      sessions[existingIndex] = sessionData;
+      // Update existing session
+      sessions[existingIndex].conversationHistory.push(newMessage);
+      sessions[existingIndex].lastActivity = Date.now();
     } else {
+      // Create new session
+      const sessionData: UserSession = {
+        userId,
+        conversationHistory: [newMessage],
+        createdAt: Date.now(),
+        lastActivity: Date.now(),
+      };
       sessions.push(sessionData);
     }
 
@@ -46,7 +64,7 @@ export class StorageService {
   }
 
   /**
-   * Clear user session (for new conversation)
+   * Clear user conversation (for new conversation)
    */
   static async clearUserSession(userId: string): Promise<void> {
     const sessions = await this.loadSessions();

@@ -1,5 +1,5 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { ClaudeAgentService } from '../services/agent.service.js';
+import { BedrockAgentService } from '../services/bedrock.service.js';
 import { StorageService } from '../services/storage.service.js';
 
 interface ChatQueryParams {
@@ -8,7 +8,7 @@ interface ChatQueryParams {
 }
 
 export async function chatRoutes(fastify: FastifyInstance) {
-  const agentService = new ClaudeAgentService();
+  const agentService = new BedrockAgentService();
 
   // SSE streaming endpoint
   fastify.get(
@@ -37,22 +37,26 @@ export async function chatRoutes(fastify: FastifyInstance) {
       };
 
       try {
-        // Get existing session ID for this user (if any)
-        const existingSessionId = await StorageService.getUserSession(userId);
+        // Get conversation history for this user
+        const conversationHistory = await StorageService.getUserConversation(userId);
 
-        // Process message - SDK handles history via session ID
-        const result = await agentService.processMessage(existingSessionId, message, onStream);
+        // Add user message to history
+        await StorageService.addMessage(userId, 'user', message);
 
-        // Save new/updated session ID
-        if (result.sessionId) {
-          await StorageService.saveUserSession(userId, result.sessionId);
-        }
+        // Process message with Bedrock
+        const result = await agentService.processMessage(
+          conversationHistory,
+          message,
+          onStream
+        );
+
+        // Add assistant response to history
+        await StorageService.addMessage(userId, 'assistant', result.response);
 
         // Send completion event
         reply.raw.write(
           `data: ${JSON.stringify({
             type: 'message_complete',
-            sessionId: result.sessionId,
             message: { role: 'assistant', content: result.response },
           })}\n\n`
         );
@@ -71,17 +75,27 @@ export async function chatRoutes(fastify: FastifyInstance) {
     }
   );
 
-  // Get user session info
-  fastify.get('/session/:userId', async (request: FastifyRequest<{ Params: { userId: string } }>) => {
-    const { userId } = request.params;
-    const sessionId = await StorageService.getUserSession(userId);
-    return { userId, sessionId, hasSession: !!sessionId };
-  });
+  // Get user conversation info
+  fastify.get(
+    '/session/:userId',
+    async (request: FastifyRequest<{ Params: { userId: string } }>) => {
+      const { userId } = request.params;
+      const conversationHistory = await StorageService.getUserConversation(userId);
+      return {
+        userId,
+        messageCount: conversationHistory.length,
+        hasSession: conversationHistory.length > 0,
+      };
+    }
+  );
 
-  // Clear user session (start new conversation)
-  fastify.delete('/session/:userId', async (request: FastifyRequest<{ Params: { userId: string } }>) => {
-    const { userId } = request.params;
-    await StorageService.clearUserSession(userId);
-    return { userId, cleared: true };
-  });
+  // Clear user conversation (start new conversation)
+  fastify.delete(
+    '/session/:userId',
+    async (request: FastifyRequest<{ Params: { userId: string } }>) => {
+      const { userId } = request.params;
+      await StorageService.clearUserSession(userId);
+      return { userId, cleared: true };
+    }
+  );
 }
