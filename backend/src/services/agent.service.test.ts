@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ClaudeAgentService } from './agent.service.js';
+import { ClaudeAgentService, StreamEvent } from './agent.service.js';
 
 // Mock the Claude Agent SDK
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
@@ -43,12 +43,14 @@ describe('ClaudeAgentService', () => {
           for (const msg of mockMessages) {
             yield msg;
           }
-        })()
+        })() as any
       );
 
       const streamedChunks: string[] = [];
-      const onStream = (delta: string) => {
-        streamedChunks.push(delta);
+      const onStream = (event: StreamEvent) => {
+        if (event.type === 'content_delta' && event.delta) {
+          streamedChunks.push(event.delta);
+        }
       };
 
       const result = await agentService.processMessage(undefined, 'Hello', onStream);
@@ -85,14 +87,18 @@ describe('ClaudeAgentService', () => {
           for (const msg of mockMessages) {
             yield msg;
           }
-        })()
+        })() as any
       );
 
       const streamedChunks: string[] = [];
       const result = await agentService.processMessage(
         existingSessionId,
         'Continue',
-        (delta) => streamedChunks.push(delta)
+        (event) => {
+          if (event.type === 'content_delta' && event.delta) {
+            streamedChunks.push(event.delta);
+          }
+        }
       );
 
       expect(query).toHaveBeenCalledWith({
@@ -139,13 +145,15 @@ describe('ClaudeAgentService', () => {
           for (const msg of mockMessages) {
             yield msg;
           }
-        })()
+        })() as any
       );
 
       const streamedChunks: string[] = [];
-      const result = await agentService.processMessage(undefined, 'Test', (delta) =>
-        streamedChunks.push(delta)
-      );
+      const result = await agentService.processMessage(undefined, 'Test', (event) => {
+        if (event.type === 'content_delta' && event.delta) {
+          streamedChunks.push(event.delta);
+        }
+      });
 
       expect(result.response).toBe('First chunk second chunk third chunk');
       expect(streamedChunks).toEqual(['First chunk ', 'second chunk ', 'third chunk']);
@@ -177,13 +185,15 @@ describe('ClaudeAgentService', () => {
           for (const msg of mockMessages) {
             yield msg;
           }
-        })()
+        })() as any
       );
 
       const streamedChunks: string[] = [];
-      const result = await agentService.processMessage(undefined, 'Test', (delta) =>
-        streamedChunks.push(delta)
-      );
+      const result = await agentService.processMessage(undefined, 'Test', (event) => {
+        if (event.type === 'content_delta' && event.delta) {
+          streamedChunks.push(event.delta);
+        }
+      });
 
       expect(result.response).toBe('Part 1 Part 2');
       expect(streamedChunks).toEqual(['Part 1 ', 'Part 2']);
@@ -215,15 +225,16 @@ describe('ClaudeAgentService', () => {
           for (const msg of mockMessages) {
             yield msg;
           }
-        })()
+        })() as any
       );
 
       const onStream = vi.fn();
       await agentService.processMessage(undefined, 'Test', onStream);
 
-      expect(onStream).toHaveBeenCalledTimes(2);
-      expect(onStream).toHaveBeenNthCalledWith(1, 'chunk1');
-      expect(onStream).toHaveBeenNthCalledWith(2, 'chunk2');
+      expect(onStream).toHaveBeenCalledTimes(3); // init status + 2 content deltas
+      expect(onStream).toHaveBeenNthCalledWith(1, { type: 'status', status: 'Initialized conversation session' });
+      expect(onStream).toHaveBeenNthCalledWith(2, { type: 'content_delta', delta: 'chunk1' });
+      expect(onStream).toHaveBeenNthCalledWith(3, { type: 'content_delta', delta: 'chunk2' });
     });
 
     it('should handle non-text content blocks gracefully', async () => {
@@ -250,13 +261,15 @@ describe('ClaudeAgentService', () => {
           for (const msg of mockMessages) {
             yield msg;
           }
-        })()
+        })() as any
       );
 
       const streamedChunks: string[] = [];
-      const result = await agentService.processMessage(undefined, 'Test', (delta) =>
-        streamedChunks.push(delta)
-      );
+      const result = await agentService.processMessage(undefined, 'Test', (event) => {
+        if (event.type === 'content_delta' && event.delta) {
+          streamedChunks.push(event.delta);
+        }
+      });
 
       expect(result.response).toBe('Text content more text');
       expect(streamedChunks).toEqual(['Text content', ' more text']);
