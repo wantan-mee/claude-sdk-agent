@@ -2,6 +2,8 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import { config } from './config/env.js';
 import { chatRoutes } from './routes/chat.routes.js';
+import { artifactRoutes } from './routes/artifact.routes.js';
+import { ArtifactService } from './services/artifact.service.js';
 
 const fastify = Fastify({
   logger: {
@@ -20,8 +22,12 @@ fastify.get('/api/health', async () => {
   return { status: 'ok', timestamp: new Date().toISOString() };
 });
 
+// Initialize artifact service
+await ArtifactService.initialize();
+
 // Register routes
 await fastify.register(chatRoutes, { prefix: '/api' });
+await fastify.register(artifactRoutes, { prefix: '/api' });
 
 // Start server
 const start = async () => {
@@ -29,6 +35,7 @@ const start = async () => {
     await fastify.listen({ port: config.port, host: '0.0.0.0' });
     console.log(`🚀 Backend server running at http://localhost:${config.port}`);
     console.log(`📡 Frontend URL: ${config.frontendUrl}`);
+    console.log(`📁 Agent output directory: ${config.agentOutputDir}`);
   } catch (err) {
     fastify.log.error(err);
     process.exit(1);

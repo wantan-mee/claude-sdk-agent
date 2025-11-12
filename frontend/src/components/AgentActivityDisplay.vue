@@ -44,6 +44,9 @@
             <svg v-else-if="activity.type === 'tool_result'" class="w-4 h-4 text-teal-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
+            <svg v-else-if="activity.type === 'file_created'" class="w-4 h-4 text-orange-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
           </span>
           <div class="flex-1">
             <div class="font-medium text-gray-700">{{ activity.content }}</div>
@@ -56,6 +59,11 @@
                 <summary class="cursor-pointer hover:text-gray-700">View tool result</summary>
                 <pre class="mt-1 p-2 bg-gray-50 rounded text-xs overflow-auto max-h-32">{{ formatToolResult(activity.details.toolResult) }}</pre>
               </details>
+              <div v-else-if="activity.type === 'file_created'" class="text-xs mt-1">
+                <div class="text-gray-600">Path: <span class="font-mono">{{ activity.details.filePath }}</span></div>
+                <div class="text-gray-600">Size: {{ formatFileSize(activity.details.fileSize) }}</div>
+                <a :href="`/api/artifacts/${activity.details.filePath}`" target="_blank" class="text-blue-600 hover:text-blue-800 underline">View file</a>
+              </div>
             </div>
           </div>
           <span class="text-gray-400 text-xs flex-shrink-0">
@@ -90,5 +98,12 @@ const formatToolResult = (result: any) => {
     return result;
   }
   return JSON.stringify(result, null, 2);
+};
+
+const formatFileSize = (bytes: number | undefined) => {
+  if (!bytes) return 'Unknown';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(2)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 };
 </script>

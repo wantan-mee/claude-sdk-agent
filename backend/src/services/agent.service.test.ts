@@ -106,6 +106,8 @@ describe('ClaudeAgentService', () => {
         options: {
           resume: existingSessionId,
           model: 'claude-sonnet-4-5',
+          cwd: expect.any(String),
+          permissionMode: 'bypassPermissions',
         },
       });
 

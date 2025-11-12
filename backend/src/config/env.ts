@@ -10,6 +10,7 @@ export const config = {
   port: parseInt(process.env.PORT || '8000', 10),
   nodeEnv: process.env.NODE_ENV || 'development',
   dataDir: process.env.DATA_DIR || path.join(process.cwd(), 'data'),
+  agentOutputDir: process.env.AGENT_OUTPUT_DIR || path.join(process.cwd(), 'agent-output'),
   frontendUrl: process.env.FRONTEND_URL || 'http://localhost:5173',
 } as const;
 
