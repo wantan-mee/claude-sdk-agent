@@ -1,0 +1,35 @@
+{
+  "name": "claude-sdk-agent",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Full-stack chatbot application powered by Claude Agent SDK with real-time streaming",
+  "scripts": {
+    "dev": "concurrently \"pnpm dev:backend\" \"pnpm dev:frontend\"",
+    "dev:frontend": "pnpm --filter frontend dev",
+    "dev:backend": "pnpm --filter backend dev",
+    "build": "pnpm --filter backend build && pnpm --filter frontend build",
+    "build:frontend": "pnpm --filter frontend build",
+    "build:backend": "pnpm --filter backend build",
+    "start": "pnpm --filter backend start",
+    "test": "pnpm --recursive test",
+    "test:frontend": "pnpm --filter frontend test",
+    "test:backend": "pnpm --filter backend test",
+    "test:watch": "pnpm --recursive test:watch",
+    "test:coverage": "pnpm --filter backend test:coverage && pnpm --filter frontend test:coverage",
+    "test:e2e": "playwright test",
+    "lint": "pnpm --recursive lint",
+    "lint:fix": "pnpm --recursive lint:fix",
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
+    "type-check": "pnpm --recursive type-check"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.40.1",
+    "concurrently": "^8.2.2",
+    "prettier": "^3.1.1",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=21.0.0",
+    "pnpm": ">=8.0.0"
+  }
+}
