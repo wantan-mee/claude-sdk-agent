@@ -14,6 +14,9 @@
       :streaming-content="streamingContent"
       :is-streaming="isStreaming"
       :error="error"
+      :current-status="currentStatus"
+      :current-thinking="currentThinking"
+      :activities="activities"
     />
 
     <!-- Input Box -->
@@ -33,6 +36,15 @@ import InputBox from '../components/InputBox.vue';
 // Generate a simple user ID (in production, this would come from authentication)
 const userId = `user-${Math.random().toString(36).substring(7)}`;
 
-const { messages, streamingContent, isStreaming, error, sendMessage, clearConversation } =
-  useStreaming(userId);
+const {
+  messages,
+  streamingContent,
+  isStreaming,
+  error,
+  currentStatus,
+  currentThinking,
+  activities,
+  sendMessage,
+  clearConversation,
+} = useStreaming(userId);
 </script>

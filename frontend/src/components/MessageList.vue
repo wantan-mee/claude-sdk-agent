@@ -14,6 +14,14 @@
       :message="message"
     />
 
+    <!-- Show agent activity and status updates -->
+    <AgentActivityDisplay
+      :is-streaming="isStreaming"
+      :current-status="currentStatus"
+      :current-thinking="currentThinking"
+      :activities="activities"
+    />
+
     <StreamingMessage v-if="isStreaming" :content="streamingContent" />
 
     <div v-if="error" class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">
@@ -24,22 +32,26 @@
 
 <script setup lang="ts">
 import { ref, watch, nextTick } from 'vue';
-import type { Message as MessageType } from '../types';
+import type { Message as MessageType, AgentActivity } from '../types';
 import Message from './Message.vue';
 import StreamingMessage from './StreamingMessage.vue';
+import AgentActivityDisplay from './AgentActivityDisplay.vue';
 
 const props = defineProps<{
   messages: MessageType[];
   streamingContent: string;
   isStreaming: boolean;
   error: string | null;
+  currentStatus: string;
+  currentThinking: string;
+  activities: AgentActivity[];
 }>();
 
 const messageContainer = ref<HTMLDivElement | null>(null);
 
-// Auto-scroll to bottom when new messages arrive
+// Auto-scroll to bottom when new messages or activities arrive
 watch(
-  () => [props.messages.length, props.streamingContent],
+  () => [props.messages.length, props.streamingContent, props.activities.length, props.currentStatus],
   async () => {
     await nextTick();
     if (messageContainer.value) {

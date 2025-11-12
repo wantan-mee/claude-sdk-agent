@@ -1,5 +1,5 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { ClaudeAgentService } from '../services/agent.service.js';
+import { ClaudeAgentService, StreamEvent } from '../services/agent.service.js';
 import { StorageService } from '../services/storage.service.js';
 
 interface ChatQueryParams {
@@ -10,7 +10,7 @@ interface ChatQueryParams {
 export async function chatRoutes(fastify: FastifyInstance) {
   const agentService = new ClaudeAgentService();
 
-  // SSE streaming endpoint
+  // SSE streaming endpoint with enhanced transparency
   fastify.get(
     '/chat/stream',
     async (request: FastifyRequest<{ Querystring: ChatQueryParams }>, reply: FastifyReply) => {
@@ -27,18 +27,20 @@ export async function chatRoutes(fastify: FastifyInstance) {
         'Connection': 'keep-alive',
       });
 
-      const onStream = (delta: string) => {
-        reply.raw.write(
-          `data: ${JSON.stringify({
-            type: 'content_delta',
-            delta,
-          })}\n\n`
-        );
+      // Stream ALL events to frontend for transparency
+      const onStream = (event: StreamEvent) => {
+        reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
       };
 
       try {
         // Get existing session ID for this user (if any)
         const existingSessionId = await StorageService.getUserSession(userId);
+
+        // Send initial status
+        onStream({
+          type: 'status',
+          status: existingSessionId ? 'Resuming conversation...' : 'Starting new conversation...',
+        });
 
         // Process message - SDK handles history via session ID
         const result = await agentService.processMessage(existingSessionId, message, onStream);
