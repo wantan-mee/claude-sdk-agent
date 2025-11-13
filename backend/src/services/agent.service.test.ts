@@ -107,7 +107,13 @@ describe('ClaudeAgentService', () => {
           resume: existingSessionId,
           model: 'claude-sonnet-4-5',
           cwd: expect.any(String),
+          maxThinkingTokens: 10000,
           permissionMode: 'bypassPermissions',
+          systemPrompt: expect.objectContaining({
+            type: 'preset',
+            preset: 'claude_code',
+            append: expect.any(String),
+          }),
         },
       });
 
