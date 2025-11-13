@@ -35,14 +35,6 @@ app.get('/api/health', (_req, res) => {
 // Initialize artifact service
 await ArtifactService.initialize();
 
-// Set AWS credentials in environment for Claude SDK (if available)
-if (config.awsAccessKeyId && config.awsSecretAccessKey) {
-  process.env.AWS_ACCESS_KEY_ID = config.awsAccessKeyId;
-  process.env.AWS_SECRET_ACCESS_KEY = config.awsSecretAccessKey;
-  process.env.AWS_REGION = config.awsRegion;
-  console.log(`🔐 AWS credentials configured for region: ${config.awsRegion}`);
-}
-
 // Register routes
 app.use('/api', chatRoutes);
 app.use('/api', artifactRoutes);
@@ -61,13 +53,10 @@ const start = async () => {
       console.log(`📡 Frontend URL: ${config.frontendUrl}`);
       console.log(`📁 Agent output directory: ${config.agentOutputDir}`);
 
-      // Log authentication method
-      if (config.awsAccessKeyId && config.awsSecretAccessKey) {
-        console.log(`🔑 Authentication: AWS Bedrock (${config.awsRegion})`);
-      } else if (config.anthropicApiKey) {
-        console.log(`🔑 Authentication: Anthropic API (direct)`);
+      if (config.anthropicApiKey) {
+        console.log(`🔑 Authentication: Anthropic API key configured`);
       } else {
-        console.warn(`⚠️  No authentication credentials configured!`);
+        console.warn(`⚠️  No ANTHROPIC_API_KEY configured!`);
       }
     });
   } catch (err) {
