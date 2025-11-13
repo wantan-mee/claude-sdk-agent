@@ -24,9 +24,15 @@ export interface StreamEvent {
 
 export class ClaudeAgentService {
   /**
-   * Process a chat message using Claude Agent SDK
+   * Process a chat message using Claude Agent SDK with EXTENDED THINKING enabled
    * The SDK automatically manages conversation history via session IDs
-   * Streams ALL events including thoughts, tool use, and status updates
+   * Streams ALL events including deep reasoning thoughts, tool use, and status updates
+   *
+   * Extended thinking enables:
+   * - Multi-step reasoning chains
+   * - Iterative tool use (search multiple times, refine queries)
+   * - Self-correction and verification
+   * - Deep analysis before answering
    */
   async processMessage(
     sessionId: string | undefined,
@@ -36,20 +42,47 @@ export class ClaudeAgentService {
     // Initialize artifact directory if needed
     await ArtifactService.initialize();
 
-    // Use Claude Agent SDK with full tool access and configured working directory
+    // Use Claude Agent SDK with full tool access and EXTENDED THINKING
     const response = query({
       prompt: userMessage,
       options: {
         resume: sessionId, // SDK loads history automatically
         model: 'claude-sonnet-4-5',
         cwd: config.agentOutputDir, // Set working directory to agent-output
-        // Enable all tools (web search, file operations, bash, etc.) by not specifying allowedTools/disallowedTools
-        permissionMode: 'bypassPermissions', // Allow all operations without prompting (suitable for server-side use)
+
+        // 🧠 ENABLE EXTENDED THINKING for deep reasoning
+        // This allows the agent to think through complex problems step-by-step
+        // before responding. Essential for multi-round knowledge base searches.
+        maxThinkingTokens: 10000, // Allow up to 10k tokens for reasoning
+
+        // Enable all tools (web search, file operations, bash, etc.)
+        permissionMode: 'bypassPermissions', // Allow all operations without prompting
+
+        // System prompt encouraging deep reasoning
+        systemPrompt: {
+          type: 'preset',
+          preset: 'claude_code',
+          append: `
+
+When answering questions:
+1. Think step-by-step about what information you need
+2. Use tools iteratively - search, analyze, search again if needed
+3. Refine your queries based on what you learn
+4. Verify your understanding before answering
+5. Synthesize information from multiple sources
+
+For knowledge base searches:
+- Start with broad queries to understand the domain
+- Follow up with specific queries for details
+- Search 3-5 times if needed to get complete context
+- Always cite which documents inform your answer`
+        }
       },
     });
 
     let newSessionId: string | undefined;
     let fullResponse = '';
+    let currentThinking = ''; // Accumulate thinking text
 
     // Track files that existed before processing
     const existingFiles = new Set<string>();
@@ -106,6 +139,30 @@ export class ClaudeAgentService {
       // Stream assistant messages (thoughts, text, tool use)
       if (message.type === 'assistant') {
         const content = message.message.content;
+
+        // 🧠 PRIORITY: Stream thinking blocks FIRST (before content)
+        // Extended thinking appears in the message and should be shown prominently
+        if ((message.message as any).thinking) {
+          const thinkingContent = (message.message as any).thinking;
+          const thinkingText = typeof thinkingContent === 'string'
+            ? thinkingContent
+            : JSON.stringify(thinkingContent, null, 2);
+
+          // Check if this is new thinking or continuation
+          if (thinkingText !== currentThinking) {
+            // Stream the incremental thinking delta
+            const delta = thinkingText.slice(currentThinking.length);
+            if (delta) {
+              currentThinking = thinkingText;
+              onStream({
+                type: 'thinking',
+                thinking: delta, // Stream only the new part
+              });
+            }
+          }
+        }
+
+        // Stream content blocks (text, tool use)
         if (Array.isArray(content)) {
           for (const block of content) {
             // Stream text content
@@ -116,24 +173,21 @@ export class ClaudeAgentService {
                 delta: block.text,
               });
             }
-            // Stream tool use
+            // Stream tool use - shows what tools the agent is calling
             else if (block.type === 'tool_use') {
               onStream({
                 type: 'tool_use',
                 toolName: block.name,
                 toolInput: block.input,
               });
+
+              // Send status update for better UX
+              onStream({
+                type: 'status',
+                status: `Using ${block.name}...`,
+              });
             }
           }
-        }
-
-        // Stream thinking blocks
-        if ((message.message as any).thinking) {
-          const thinking = (message.message as any).thinking;
-          onStream({
-            type: 'thinking',
-            thinking: typeof thinking === 'string' ? thinking : JSON.stringify(thinking),
-          });
         }
       }
 
