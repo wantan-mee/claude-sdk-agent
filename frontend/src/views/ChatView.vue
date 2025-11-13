@@ -10,8 +10,8 @@
 
     <!-- Main Content: Split Screen Layout -->
     <div class="flex-1 flex overflow-hidden">
-      <!-- Left Side: Chat Messages (70%) -->
-      <div class="flex flex-col w-[70%] border-r border-gray-200">
+      <!-- Left Side: Chat Messages (Dynamic width based on panel state) -->
+      <div class="flex flex-col flex-1 border-r border-gray-200">
         <MessageList
           :messages="messages"
           :streaming-content="streamingContent"
@@ -27,7 +27,7 @@
         />
       </div>
 
-      <!-- Right Side: Agent Activity Panel (30%) -->
+      <!-- Right Side: Agent Activity Panel (Auto-expand on deep reasoning) -->
       <AgentActivityPanel
         :is-streaming="isStreaming"
         :current-status="currentStatus"
