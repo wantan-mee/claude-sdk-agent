@@ -5,7 +5,11 @@
       'message-assistant': message.role === 'assistant',
     }"
   >
-    <div class="whitespace-pre-wrap break-words">{{ message.content }}</div>
+    <MarkdownRenderer
+      v-if="message.role === 'assistant'"
+      :content="message.content"
+    />
+    <div v-else class="whitespace-pre-wrap break-words">{{ message.content }}</div>
     <div class="text-xs opacity-70 mt-1">
       {{ formatTime(message.timestamp) }}
     </div>
@@ -14,6 +18,7 @@
 
 <script setup lang="ts">
 import type { Message } from '../types';
+import MarkdownRenderer from './MarkdownRenderer.vue';
 
 defineProps<{
   message: Message;

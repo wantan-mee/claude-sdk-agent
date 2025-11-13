@@ -1,6 +1,6 @@
 <template>
   <div v-if="content" class="message-streaming">
-    <div class="whitespace-pre-wrap break-words">{{ content }}</div>
+    <MarkdownRenderer :content="content" />
     <div class="text-xs opacity-70 mt-1 flex items-center gap-1">
       <span>Streaming...</span>
       <div class="flex gap-1">
@@ -13,6 +13,8 @@
 </template>
 
 <script setup lang="ts">
+import MarkdownRenderer from './MarkdownRenderer.vue';
+
 defineProps<{
   content: string;
 }>();
