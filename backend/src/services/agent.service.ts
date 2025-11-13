@@ -1,12 +1,13 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { config } from '../config/env.js';
 import { ArtifactService } from './artifact.service.js';
+import { Logger } from './logger.service.js';
 import path from 'path';
 import fs from 'fs/promises';
 
 // Enhanced streaming callback to handle all event types
 export interface StreamEvent {
-  type: 'content_delta' | 'thinking' | 'tool_use' | 'tool_result' | 'status' | 'error' | 'message_complete' | 'file_created';
+  type: 'content_delta' | 'thinking' | 'tool_use' | 'tool_result' | 'status' | 'error' | 'message_complete' | 'file_created' | 'raw_message' | 'metrics' | 'assistant_meta';
   delta?: string;
   thinking?: string;
   toolName?: string;
@@ -20,9 +21,65 @@ export interface StreamEvent {
   fileName?: string;
   filePath?: string;
   fileSize?: number;
+  // Raw message for debugging
+  rawMessage?: any;
+  // Performance metrics
+  metrics?: {
+    thinkingTokens?: number;
+    outputTokens?: number;
+    totalTokens?: number;
+    duration?: number;
+    toolCallCount?: number;
+    thinkingBlocks?: number;
+  };
+  // Assistant message metadata
+  assistantMeta?: {
+    model?: string;
+    stopReason?: string;
+    usage?: {
+      inputTokens?: number;
+      outputTokens?: number;
+      cacheCreationInputTokens?: number;
+      cacheReadInputTokens?: number;
+    };
+  };
 }
 
 export class ClaudeAgentService {
+  /**
+   * Get user-friendly description for tool names
+   */
+  private getToolDescription(toolName: string): string {
+    const toolDescriptions: Record<string, string> = {
+      // Web and search tools
+      'web_search': '🔍 Searching the web',
+      'web_fetch': '🌐 Fetching webpage',
+      'scrape': '📄 Scraping content',
+
+      // File operations
+      'read_file': '📖 Reading file',
+      'write_file': '✍️ Writing file',
+      'edit_file': '✏️ Editing file',
+      'list_files': '📂 Listing files',
+      'create_directory': '📁 Creating directory',
+
+      // Code operations
+      'execute_code': '⚡ Executing code',
+      'run_command': '💻 Running command',
+      'bash': '🖥️ Running shell command',
+
+      // Analysis tools
+      'analyze': '🔬 Analyzing',
+      'search': '🔎 Searching',
+      'grep': '🔍 Searching content',
+
+      // Default
+      'unknown': '🛠️ Using tool',
+    };
+
+    return toolDescriptions[toolName] || toolDescriptions['unknown'];
+  }
+
   /**
    * Process a chat message using Claude Agent SDK with EXTENDED THINKING enabled
    * The SDK automatically manages conversation history via session IDs
@@ -37,8 +94,19 @@ export class ClaudeAgentService {
   async processMessage(
     sessionId: string | undefined,
     userMessage: string,
-    onStream: (event: StreamEvent) => void
+    onStream: (event: StreamEvent) => void,
+    userId?: string
   ): Promise<{ sessionId: string | undefined; response: string }> {
+    // Start performance timer
+    const overallTimer = Logger.startTimer();
+
+    // Log agent initialization
+    Logger.agentInit(sessionId || 'new', userId || 'unknown', !!sessionId);
+    Logger.info('AGENT', 'Processing message', {
+      messageLength: userMessage.length,
+      preview: userMessage.substring(0, 100)
+    }, { sessionId, userId });
+
     // Initialize artifact directory if needed
     await ArtifactService.initialize();
 
@@ -84,6 +152,12 @@ For knowledge base searches:
     let fullResponse = '';
     let currentThinking = ''; // Accumulate thinking text
 
+    // Performance and metrics tracking
+    let toolCallCount = 0;
+    let thinkingBlocks = 0;
+    let totalThinkingLength = 0;
+    const toolTimers = new Map<string, ReturnType<typeof Logger.startTimer>>();
+
     // Track files that existed before processing
     const existingFiles = new Set<string>();
     try {
@@ -91,6 +165,7 @@ For knowledge base searches:
       artifacts.forEach(a => existingFiles.add(a.relativePath));
     } catch (error) {
       // Ignore errors reading existing files
+      Logger.warn('AGENT', 'Failed to read existing artifacts', error, { sessionId });
     }
 
     // Set up file watching for this session
@@ -119,31 +194,94 @@ For knowledge base searches:
 
     // Stream ALL response events for transparency
     for await (const message of response) {
+      // Log every raw message for complete transparency
+      Logger.agentMessage(newSessionId || sessionId || 'unknown', message.type, message);
+
+      // Stream raw message to frontend if debug mode enabled
+      if (config.nodeEnv === 'development') {
+        onStream({
+          type: 'raw_message',
+          rawMessage: message,
+        });
+      }
+
       // Capture session ID from init message
       if (message.type === 'system' && message.subtype === 'init') {
         newSessionId = message.session_id;
+        Logger.info('AGENT', 'Session initialized', {
+          sessionId: newSessionId,
+          isNewSession: !sessionId
+        }, { sessionId: newSessionId, userId });
+
         onStream({
           type: 'status',
           status: 'Initialized conversation session',
+          sessionId: newSessionId,
         });
       }
 
       // Stream status updates
       if (message.type === 'system' && message.subtype === 'status') {
+        const status = (message as any).status || 'Processing...';
+        Logger.debug('AGENT_STATUS', status, undefined, { sessionId: newSessionId });
+
         onStream({
           type: 'status',
-          status: (message as any).status || 'Processing...',
+          status,
         });
       }
 
       // Stream assistant messages (thoughts, text, tool use)
       if (message.type === 'assistant') {
-        const content = message.message.content;
+        const assistantMsg = message.message;
+        const content = assistantMsg.content;
+
+        // Extract metadata from assistant message
+        const stopReason = assistantMsg.stop_reason;
+        const usage = assistantMsg.usage;
+        const modelId = assistantMsg.model;
+
+        // Send status update about the assistant message
+        let statusMessage = 'Processing response';
+        if (stopReason === 'tool_use') {
+          statusMessage = 'Agent is using tools';
+        } else if (stopReason === 'end_turn') {
+          statusMessage = 'Completing response';
+        } else if (stopReason === 'max_tokens') {
+          statusMessage = 'Response length limit reached';
+        }
+
+        Logger.debug('AGENT_ASSISTANT', `Assistant message received`, {
+          stopReason,
+          usage,
+          model: modelId,
+          contentBlocks: Array.isArray(content) ? content.length : 0
+        }, { sessionId: newSessionId });
+
+        // Stream assistant metadata to frontend
+        onStream({
+          type: 'assistant_meta',
+          assistantMeta: {
+            model: modelId,
+            stopReason,
+            usage: usage ? {
+              inputTokens: usage.input_tokens,
+              outputTokens: usage.output_tokens,
+              cacheCreationInputTokens: usage.cache_creation_input_tokens,
+              cacheReadInputTokens: usage.cache_read_input_tokens,
+            } : undefined,
+          },
+        });
+
+        onStream({
+          type: 'status',
+          status: statusMessage,
+        });
 
         // 🧠 PRIORITY: Stream thinking blocks FIRST (before content)
         // Extended thinking appears in the message and should be shown prominently
-        if ((message.message as any).thinking) {
-          const thinkingContent = (message.message as any).thinking;
+        if ((assistantMsg as any).thinking) {
+          const thinkingContent = (assistantMsg as any).thinking;
           const thinkingText = typeof thinkingContent === 'string'
             ? thinkingContent
             : JSON.stringify(thinkingContent, null, 2);
@@ -154,60 +292,147 @@ For knowledge base searches:
             const delta = thinkingText.slice(currentThinking.length);
             if (delta) {
               currentThinking = thinkingText;
+              totalThinkingLength = thinkingText.length;
+              thinkingBlocks++;
+
+              Logger.agentThinking(newSessionId || 'unknown', delta, false);
+
               onStream({
                 type: 'thinking',
                 thinking: delta, // Stream only the new part
+              });
+
+              onStream({
+                type: 'status',
+                status: 'Agent is thinking...',
               });
             }
           }
         }
 
-        // Stream content blocks (text, tool use)
+        // Stream content blocks (text, tool use, thinking)
         if (Array.isArray(content)) {
           for (const block of content) {
             // Stream text content
             if (block.type === 'text') {
               fullResponse += block.text;
+              Logger.agentContent(newSessionId || 'unknown', block.text);
+
               onStream({
                 type: 'content_delta',
                 delta: block.text,
               });
+
+              onStream({
+                type: 'status',
+                status: 'Generating response...',
+              });
+            }
+            // Stream thinking content blocks (extended thinking)
+            else if (block.type === 'thinking') {
+              const thinkingText = block.thinking || '';
+
+              thinkingBlocks++;
+              Logger.agentThinking(newSessionId || 'unknown', thinkingText, false);
+
+              onStream({
+                type: 'thinking',
+                thinking: thinkingText,
+              });
+
+              onStream({
+                type: 'status',
+                status: 'Deep reasoning in progress...',
+              });
             }
             // Stream tool use - shows what tools the agent is calling
             else if (block.type === 'tool_use') {
+              toolCallCount++;
+              const toolId = `${block.name}_${toolCallCount}`;
+              toolTimers.set(toolId, Logger.startTimer());
+
+              Logger.agentToolUse(newSessionId || 'unknown', block.name, block.input);
+
               onStream({
                 type: 'tool_use',
                 toolName: block.name,
                 toolInput: block.input,
               });
 
-              // Send status update for better UX
+              // Send detailed status update for tool use
+              const toolDescription = this.getToolDescription(block.name);
               onStream({
                 type: 'status',
-                status: `Using ${block.name}...`,
+                status: `${toolDescription}: ${block.name}`,
               });
             }
           }
+        }
+
+        // Stream usage/token information if available
+        if (usage) {
+          Logger.debug('AGENT_USAGE', 'Token usage', usage, { sessionId: newSessionId });
+
+          onStream({
+            type: 'status',
+            status: `Tokens used - Input: ${usage.input_tokens || 0}, Output: ${usage.output_tokens || 0}`,
+          });
         }
       }
 
       // Stream tool results
       if (message.type === 'result') {
+        const toolName = (message as any).tool_name || 'Tool';
+        const toolId = `${toolName}_${toolCallCount}`;
+        const timer = toolTimers.get(toolId);
+        const duration = timer ? timer() : undefined;
+
+        Logger.agentToolResult(newSessionId || 'unknown', toolName, (message as any).result || message, duration);
+
         onStream({
           type: 'tool_result',
-          toolName: (message as any).tool_name || 'Tool',
+          toolName,
           toolResult: (message as any).result || message,
         });
       }
 
       // Stream tool progress updates
       if (message.type === 'tool_progress') {
+        const progressMessage = (message as any).message || 'Processing...';
+        Logger.debug('AGENT_TOOL_PROGRESS', progressMessage, undefined, { sessionId: newSessionId });
+
         onStream({
           type: 'status',
-          status: `Tool in progress: ${(message as any).message || 'Processing...'}`,
+          status: `Tool in progress: ${progressMessage}`,
         });
       }
     }
+
+    // Log final thinking state
+    if (currentThinking) {
+      Logger.agentThinking(newSessionId || 'unknown', currentThinking, true);
+    }
+
+    // Calculate final performance metrics
+    const totalDuration = overallTimer();
+    const metrics = {
+      thinkingTokens: totalThinkingLength,
+      outputTokens: fullResponse.length,
+      totalTokens: totalThinkingLength + fullResponse.length,
+      duration: totalDuration,
+      toolCallCount,
+      thinkingBlocks,
+    };
+
+    // Log completion with metrics
+    Logger.agentComplete(newSessionId || 'unknown', metrics.totalTokens, totalDuration);
+    Logger.info('AGENT_METRICS', 'Request completed', metrics, { sessionId: newSessionId, userId });
+
+    // Stream metrics to frontend
+    onStream({
+      type: 'metrics',
+      metrics,
+    });
 
     // Stop file watching for this session
     if (newSessionId) {

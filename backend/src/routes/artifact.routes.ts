@@ -9,7 +9,9 @@ router.get('/artifacts', async (_req: Request, res: Response) => {
   res.json({ artifacts });
 });
 
-// Get specific artifact content
+// TEMPORARILY DISABLED: Get specific artifact content
+// TODO: Fix path syntax for path-to-regexp v8 (use ':path*' instead of ':path(*)')
+/*
 router.get('/artifacts/:path(*)', async (req: Request, res: Response) => {
   const { path } = req.params;
 
@@ -20,6 +22,7 @@ router.get('/artifacts/:path(*)', async (req: Request, res: Response) => {
     res.status(404).json({ error: 'File not found or cannot be read' });
   }
 });
+*/
 
 // Clear all artifacts
 router.delete('/artifacts', async (_req: Request, res: Response) => {

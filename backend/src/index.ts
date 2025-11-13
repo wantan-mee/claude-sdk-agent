@@ -4,8 +4,13 @@ import { config } from './config/env.js';
 import { chatRoutes } from './routes/chat.routes.js';
 import { artifactRoutes } from './routes/artifact.routes.js';
 import { ArtifactService } from './services/artifact.service.js';
+import { Logger } from './services/logger.service.js';
 
 const app = express();
+
+// Initialize logger first
+await Logger.initialize();
+Logger.info('SERVER', 'Logger initialized', { logsDir: `${config.dataDir}/logs` });
 
 // Middleware
 app.use(express.json());
@@ -19,20 +24,44 @@ app.use(
   })
 );
 
-// Request logging middleware (development only)
-if (config.nodeEnv === 'development') {
-  app.use((req, _res, next) => {
-    console.log(`${new Date().toISOString()} ${req.method} ${req.url}`);
-    next();
+// Request logging middleware (all environments)
+app.use((req, res, next) => {
+  const timer = Logger.startTimer();
+
+  // Log request
+  Logger.debug('HTTP', `${req.method} ${req.url}`, {
+    headers: req.headers,
+    query: req.query,
+    body: req.body,
   });
-}
+
+  // Capture response finish
+  res.on('finish', () => {
+    const duration = timer();
+    const level = res.statusCode >= 400 ? 'warn' : 'debug';
+
+    if (level === 'warn') {
+      Logger.warn('HTTP', `${req.method} ${req.url} ${res.statusCode}`, undefined, { duration });
+    } else {
+      Logger.debug('HTTP', `${req.method} ${req.url} ${res.statusCode}`, undefined, { duration });
+    }
+  });
+
+  next();
+});
 
 // Health check endpoint
 app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    environment: config.nodeEnv,
+    version: process.version,
+  });
 });
 
 // Initialize artifact service
+Logger.info('SERVER', 'Initializing artifact service', { outputDir: config.agentOutputDir });
 await ArtifactService.initialize();
 
 // Register routes
@@ -40,8 +69,14 @@ app.use('/api', chatRoutes);
 app.use('/api', artifactRoutes);
 
 // Error handling middleware
-app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  console.error('Error:', err.message);
+app.use((err: Error, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  Logger.error('SERVER', 'Unhandled error', {
+    error: err.message,
+    stack: err.stack,
+    method: req.method,
+    url: req.url,
+  });
+
   res.status(500).json({ error: err.message || 'Internal server error' });
 });
 
@@ -49,20 +84,52 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 const start = async () => {
   try {
     app.listen(config.port, '0.0.0.0', () => {
-      console.log(`🚀 Backend server running at http://localhost:${config.port}`);
-      console.log(`📡 Frontend URL: ${config.frontendUrl}`);
-      console.log(`📁 Agent output directory: ${config.agentOutputDir}`);
+      Logger.info('SERVER', '='.repeat(80));
+      Logger.info('SERVER', '🚀 Backend server started successfully');
+      Logger.info('SERVER', '='.repeat(80));
+      Logger.info('SERVER', `Server URL: http://localhost:${config.port}`);
+      Logger.info('SERVER', `Frontend URL: ${config.frontendUrl}`);
+      Logger.info('SERVER', `Environment: ${config.nodeEnv}`);
+      Logger.info('SERVER', `Node version: ${process.version}`);
+      Logger.info('SERVER', `Agent output: ${config.agentOutputDir}`);
+      Logger.info('SERVER', `Data directory: ${config.dataDir}`);
 
       if (config.anthropicApiKey) {
-        console.log(`🔑 Authentication: Anthropic API key configured`);
+        Logger.info('SERVER', '🔑 Anthropic API key: configured');
       } else {
-        console.warn(`⚠️  No ANTHROPIC_API_KEY configured!`);
+        Logger.warn('SERVER', '⚠️  No ANTHROPIC_API_KEY configured!');
       }
+
+      Logger.info('SERVER', '='.repeat(80));
+      Logger.info('SERVER', 'Ready to process requests');
+      Logger.info('SERVER', '='.repeat(80));
     });
   } catch (err) {
+    Logger.error('SERVER', 'Failed to start server', err);
     console.error('Failed to start server:', err);
     process.exit(1);
   }
 };
+
+// Handle process termination
+process.on('SIGTERM', () => {
+  Logger.info('SERVER', 'SIGTERM signal received: closing HTTP server');
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  Logger.info('SERVER', 'SIGINT signal received: closing HTTP server');
+  process.exit(0);
+});
+
+process.on('uncaughtException', (error) => {
+  Logger.error('SERVER', 'Uncaught exception', error);
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason) => {
+  Logger.error('SERVER', 'Unhandled rejection', reason);
+  process.exit(1);
+});
 
 start();
