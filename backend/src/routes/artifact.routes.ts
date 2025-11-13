@@ -1,35 +1,34 @@
-import { FastifyInstance, FastifyRequest } from 'fastify';
+import express, { Router, Request, Response } from 'express';
 import { ArtifactService } from '../services/artifact.service.js';
 
-export async function artifactRoutes(fastify: FastifyInstance) {
-  // Get all artifacts
-  fastify.get('/artifacts', async () => {
-    const artifacts = await ArtifactService.getArtifacts();
-    return { artifacts };
-  });
+const router: Router = Router();
 
-  // Get specific artifact content
-  fastify.get(
-    '/artifacts/:path(*)',
-    async (request: FastifyRequest<{ Params: { path: string } }>) => {
-      const { path } = request.params;
+// Get all artifacts
+router.get('/artifacts', async (_req: Request, res: Response) => {
+  const artifacts = await ArtifactService.getArtifacts();
+  res.json({ artifacts });
+});
 
-      try {
-        const content = await ArtifactService.readArtifact(path);
-        return { path, content };
-      } catch (error) {
-        return { error: 'File not found or cannot be read' };
-      }
-    }
-  );
+// Get specific artifact content
+router.get('/artifacts/:path(*)', async (req: Request, res: Response) => {
+  const { path } = req.params;
 
-  // Clear all artifacts
-  fastify.delete('/artifacts', async () => {
-    try {
-      await ArtifactService.clearArtifacts();
-      return { success: true, message: 'All artifacts cleared' };
-    } catch (error) {
-      return { success: false, error: 'Failed to clear artifacts' };
-    }
-  });
-}
+  try {
+    const content = await ArtifactService.readArtifact(path);
+    res.json({ path, content });
+  } catch (error) {
+    res.status(404).json({ error: 'File not found or cannot be read' });
+  }
+});
+
+// Clear all artifacts
+router.delete('/artifacts', async (_req: Request, res: Response) => {
+  try {
+    await ArtifactService.clearArtifacts();
+    res.json({ success: true, message: 'All artifacts cleared' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: 'Failed to clear artifacts' });
+  }
+});
+
+export const artifactRoutes: express.Router = router;
