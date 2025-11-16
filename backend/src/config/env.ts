@@ -32,3 +32,16 @@ export const config = {
 if (!config.anthropicApiKey) {
   console.warn('⚠️  ANTHROPIC_API_KEY not set. Please set it in your .env file');
 }
+
+// Validate RAG mode
+if (config.enableRag) {
+  const validRagModes = ['mcp', 'custom_tool', 'pre_retrieval'];
+  if (!validRagModes.includes(config.ragMode)) {
+    console.error(`❌ Invalid RAG_MODE: ${config.ragMode}. Must be one of: ${validRagModes.join(', ')}`);
+    process.exit(1);
+  }
+
+  if (!config.ragBedrockKbId) {
+    console.warn('⚠️  RAG is enabled but RAG_BEDROCK_KB_ID is not set');
+  }
+}

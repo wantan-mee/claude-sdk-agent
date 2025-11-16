@@ -127,17 +127,41 @@ export class ClaudeAgentService {
     let mcpServers: Array<{ command: string; args: string[]; env?: Record<string, string> }> = [];
 
     if (config.enableRag) {
-      Logger.info('AGENT', `RAG mode: ${config.ragMode}`, { ragMode: config.ragMode }, { sessionId, userId });
+      // RAG modes are mutually exclusive (XOR relationship)
+      // Only ONE mode can be active: mcp OR custom_tool OR pre_retrieval
+      Logger.info('AGENT', `RAG mode: ${config.ragMode} (exclusive - only one mode active)`, {
+        ragMode: config.ragMode,
+        mcpEnabled: config.ragMode === 'mcp',
+        customToolEnabled: config.ragMode === 'custom_tool',
+        preRetrievalEnabled: config.ragMode === 'pre_retrieval',
+      }, { sessionId, userId });
 
       onStream({
         type: 'status',
         status: `Initializing RAG (${config.ragMode} mode)...`,
       });
 
+      // Validate XOR - only one mode should be selected
+      const selectedModes = [
+        config.ragMode === 'mcp',
+        config.ragMode === 'custom_tool',
+        config.ragMode === 'pre_retrieval'
+      ].filter(Boolean).length;
+
+      if (selectedModes !== 1) {
+        Logger.error('AGENT', 'Invalid RAG configuration - exactly one mode must be selected', {
+          ragMode: config.ragMode,
+          selectedModes,
+        });
+        throw new Error('RAG configuration error: exactly one mode must be active');
+      }
+
       switch (config.ragMode) {
         case 'mcp':
           // MCP mode: Agent uses MCP server to access Bedrock KB
           // The agent will have a tool to search the KB directly
+          // NOTE: When MCP mode is active, custom_tool and pre_retrieval are DISABLED
+          Logger.info('AGENT', 'Using MCP mode - custom_tool and pre_retrieval are DISABLED');
           mcpServers.push({
             command: 'npx',
             args: ['tsx', path.join(process.cwd(), 'src/mcp/bedrock-kb-server.ts')],
@@ -174,6 +198,8 @@ Always cite which sources your information comes from.`;
         case 'custom_tool':
           // Custom tool mode: Add system prompt for KB awareness
           // Note: Claude Agent SDK handles tool routing internally
+          // NOTE: When custom_tool mode is active, mcp and pre_retrieval are DISABLED
+          Logger.info('AGENT', 'Using custom_tool mode - mcp and pre_retrieval are DISABLED');
           const { BedrockKBToolService } = await import('./bedrock-kb-tool.service.js');
           await BedrockKBToolService.initialize();
           ragSystemPromptAddition = BedrockKBToolService.getSystemPromptAddition();
@@ -192,6 +218,8 @@ Always cite which sources your information comes from.`;
         case 'pre_retrieval':
         default:
           // Pre-retrieval mode: Retrieve context before agent sees message
+          // NOTE: When pre_retrieval mode is active, mcp and custom_tool are DISABLED
+          Logger.info('AGENT', 'Using pre_retrieval mode - mcp and custom_tool are DISABLED');
           try {
             onStream({
               type: 'status',

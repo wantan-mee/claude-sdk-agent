@@ -116,7 +116,10 @@ const start = async () => {
       Logger.info('SERVER', `Artifacts storage: ${config.enableArtifactsStorage ? 'enabled' : 'disabled'}`);
       Logger.info('SERVER', `RAG service: ${config.enableRag ? 'enabled' : 'disabled'}`);
       if (config.enableRag) {
-        Logger.info('SERVER', `  Mode: ${config.ragMode} (mcp=MCP server, custom_tool=internal tool, pre_retrieval=legacy)`);
+        Logger.info('SERVER', `  Mode: ${config.ragMode} (EXCLUSIVE - only this mode is active)`);
+        Logger.info('SERVER', `    mcp: ${config.ragMode === 'mcp' ? 'ACTIVE' : 'disabled'}`);
+        Logger.info('SERVER', `    custom_tool: ${config.ragMode === 'custom_tool' ? 'ACTIVE' : 'disabled'}`);
+        Logger.info('SERVER', `    pre_retrieval: ${config.ragMode === 'pre_retrieval' ? 'ACTIVE' : 'disabled'}`);
         Logger.info('SERVER', `  KB ID: ${config.ragBedrockKbId || 'NOT CONFIGURED'}`);
         Logger.info('SERVER', `  AWS Region: ${config.ragAwsRegion}`);
         Logger.info('SERVER', `  Max Results: ${config.ragMaxResults}`);
