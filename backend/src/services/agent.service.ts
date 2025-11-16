@@ -80,6 +80,10 @@ export class ClaudeAgentService {
       'search': '🔎 Searching',
       'grep': '🔍 Searching content',
 
+      // Knowledge base tools
+      'search_knowledge_base': '📚 Searching knowledge base',
+      'multi_search_knowledge_base': '📚 Multi-searching knowledge base',
+
       // Default
       'unknown': '🛠️ Using tool',
     };
@@ -117,61 +121,129 @@ export class ClaudeAgentService {
     // Initialize artifact directory if needed
     await ArtifactService.initialize();
 
-    // Augment message with RAG context if enabled
+    // Prepare RAG configuration based on mode
     let augmentedMessage = userMessage;
+    let ragSystemPromptAddition = '';
+    let mcpServers: Array<{ command: string; args: string[]; env?: Record<string, string> }> = [];
+
     if (config.enableRag) {
-      try {
-        onStream({
-          type: 'status',
-          status: 'Retrieving relevant context from knowledge base...',
-        });
+      Logger.info('AGENT', `RAG mode: ${config.ragMode}`, { ragMode: config.ragMode }, { sessionId, userId });
 
-        const { RAGService } = await import('./rag.service.js');
-        await RAGService.initialize();
+      onStream({
+        type: 'status',
+        status: `Initializing RAG (${config.ragMode} mode)...`,
+      });
 
-        augmentedMessage = await RAGService.augmentPrompt(userMessage, (ragEvent) => {
-          // Stream RAG progress to frontend
+      switch (config.ragMode) {
+        case 'mcp':
+          // MCP mode: Agent uses MCP server to access Bedrock KB
+          // The agent will have a tool to search the KB directly
+          mcpServers.push({
+            command: 'npx',
+            args: ['tsx', path.join(process.cwd(), 'src/mcp/bedrock-kb-server.ts')],
+            env: {
+              RAG_BEDROCK_KB_ID: config.ragBedrockKbId,
+              RAG_AWS_REGION: config.ragAwsRegion,
+              RAG_MAX_RESULTS: String(config.ragMaxResults),
+              RAG_MIN_RELEVANCE_SCORE: String(config.ragMinRelevanceScore),
+            },
+          });
+
+          ragSystemPromptAddition = `
+
+## Knowledge Base Access (MCP Mode)
+
+You have direct access to an AWS Bedrock Knowledge Base through the search_knowledge_base tool.
+Use this tool to find relevant information for answering questions.
+
+**Important:** Search the knowledge base multiple times with different queries to get comprehensive information.
+The tool returns up to ${config.ragMaxResults} results per search with relevance scores.
+Always cite which sources your information comes from.`;
+
+          Logger.info('AGENT', 'MCP server configured for Bedrock KB', {
+            kbId: config.ragBedrockKbId,
+          }, { sessionId, userId });
+
           onStream({
             type: 'rag_status',
-            status: ragEvent.message,
-            ragData: ragEvent.data,
+            status: 'Knowledge Base tool available via MCP',
+            ragData: { subQueries: [], sources: [], totalResults: 0, processingTime: 0 },
           });
-        });
+          break;
 
-        Logger.info('AGENT', 'Message augmented with RAG context', {
-          originalLength: userMessage.length,
-          augmentedLength: augmentedMessage.length,
-        }, { sessionId, userId });
-      } catch (error) {
-        Logger.error('AGENT', 'RAG augmentation failed, proceeding without context', error);
-        onStream({
-          type: 'status',
-          status: 'RAG retrieval failed, proceeding without context',
-        });
+        case 'custom_tool':
+          // Custom tool mode: Add system prompt for KB awareness
+          // Note: Claude Agent SDK handles tool routing internally
+          const { BedrockKBToolService } = await import('./bedrock-kb-tool.service.js');
+          await BedrockKBToolService.initialize();
+          ragSystemPromptAddition = BedrockKBToolService.getSystemPromptAddition();
+
+          Logger.info('AGENT', 'Custom tool mode initialized for Bedrock KB', {
+            kbId: config.ragBedrockKbId,
+          }, { sessionId, userId });
+
+          onStream({
+            type: 'rag_status',
+            status: 'Knowledge Base tool available (custom tool mode)',
+            ragData: { subQueries: [], sources: [], totalResults: 0, processingTime: 0 },
+          });
+          break;
+
+        case 'pre_retrieval':
+        default:
+          // Pre-retrieval mode: Retrieve context before agent sees message
+          try {
+            onStream({
+              type: 'status',
+              status: 'Retrieving relevant context from knowledge base...',
+            });
+
+            const { RAGService } = await import('./rag.service.js');
+            await RAGService.initialize();
+
+            augmentedMessage = await RAGService.augmentPrompt(userMessage, (ragEvent) => {
+              // Stream RAG progress to frontend
+              onStream({
+                type: 'rag_status',
+                status: ragEvent.message,
+                ragData: ragEvent.data,
+              });
+            });
+
+            Logger.info('AGENT', 'Message augmented with RAG context', {
+              originalLength: userMessage.length,
+              augmentedLength: augmentedMessage.length,
+            }, { sessionId, userId });
+          } catch (error) {
+            Logger.error('AGENT', 'RAG augmentation failed, proceeding without context', error);
+            onStream({
+              type: 'status',
+              status: 'RAG retrieval failed, proceeding without context',
+            });
+          }
+          break;
       }
     }
 
-    // Use Claude Agent SDK with full tool access and EXTENDED THINKING
-    const response = query({
-      prompt: augmentedMessage,
-      options: {
-        resume: sessionId, // SDK loads history automatically
-        model: 'claude-sonnet-4-5',
-        cwd: config.agentOutputDir, // Set working directory to agent-output
+    // Build query options
+    const queryOptions: any = {
+      resume: sessionId, // SDK loads history automatically
+      model: 'claude-sonnet-4-5',
+      cwd: config.agentOutputDir, // Set working directory to agent-output
 
-        // 🧠 ENABLE EXTENDED THINKING for deep reasoning
-        // This allows the agent to think through complex problems step-by-step
-        // before responding. Essential for multi-round knowledge base searches.
-        maxThinkingTokens: 10000, // Allow up to 10k tokens for reasoning
+      // 🧠 ENABLE EXTENDED THINKING for deep reasoning
+      // This allows the agent to think through complex problems step-by-step
+      // before responding. Essential for multi-round knowledge base searches.
+      maxThinkingTokens: 10000, // Allow up to 10k tokens for reasoning
 
-        // Enable all tools (web search, file operations, bash, etc.)
-        permissionMode: 'bypassPermissions', // Allow all operations without prompting
+      // Enable all tools (web search, file operations, bash, etc.)
+      permissionMode: 'bypassPermissions', // Allow all operations without prompting
 
-        // System prompt encouraging deep reasoning
-        systemPrompt: {
-          type: 'preset',
-          preset: 'claude_code',
-          append: `
+      // System prompt encouraging deep reasoning
+      systemPrompt: {
+        type: 'preset',
+        preset: 'claude_code',
+        append: `
 
 When answering questions:
 1. Think step-by-step about what information you need
@@ -184,9 +256,20 @@ For knowledge base searches:
 - Start with broad queries to understand the domain
 - Follow up with specific queries for details
 - Search 3-5 times if needed to get complete context
-- Always cite which documents inform your answer`
-        }
-      },
+- Always cite which documents inform your answer${ragSystemPromptAddition}`
+      }
+    };
+
+    // Add MCP servers if configured
+    if (mcpServers.length > 0) {
+      queryOptions.mcpServers = mcpServers;
+      Logger.info('AGENT', `Added ${mcpServers.length} MCP server(s) to query options`);
+    }
+
+    // Use Claude Agent SDK with full tool access and EXTENDED THINKING
+    const response = query({
+      prompt: augmentedMessage,
+      options: queryOptions,
     });
 
     let newSessionId: string | undefined;

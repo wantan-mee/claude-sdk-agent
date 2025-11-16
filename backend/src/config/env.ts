@@ -25,6 +25,7 @@ export const config = {
   ragMaxResults: parseInt(process.env.RAG_MAX_RESULTS || '10', 10),
   ragMaxDecompositionQueries: parseInt(process.env.RAG_MAX_DECOMPOSITION_QUERIES || '5', 10),
   ragMinRelevanceScore: parseFloat(process.env.RAG_MIN_RELEVANCE_SCORE || '0.5'),
+  ragMode: (process.env.RAG_MODE || 'mcp') as 'mcp' | 'custom_tool' | 'pre_retrieval',
 } as const;
 
 // Validate required config
