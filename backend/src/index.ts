@@ -70,6 +70,21 @@ if (config.enableArtifactsStorage) {
   Logger.info('SERVER', 'Artifacts storage: DISABLED');
 }
 
+// Initialize RAG service (conditionally based on config)
+if (config.enableRag) {
+  Logger.info('SERVER', 'Initializing RAG service', {
+    kbId: config.ragBedrockKbId,
+    region: config.ragAwsRegion,
+  });
+  const { RAGService } = await import('./services/rag.service.js');
+  const { ragRoutes } = await import('./routes/rag.routes.js');
+  await RAGService.initialize();
+  app.use('/api', ragRoutes);
+  Logger.info('SERVER', 'RAG service: ENABLED');
+} else {
+  Logger.info('SERVER', 'RAG service: DISABLED');
+}
+
 // Register routes
 app.use('/api', chatRoutes);
 
@@ -99,6 +114,12 @@ const start = async () => {
       Logger.info('SERVER', `Agent output: ${config.agentOutputDir}`);
       Logger.info('SERVER', `Data directory: ${config.dataDir}`);
       Logger.info('SERVER', `Artifacts storage: ${config.enableArtifactsStorage ? 'enabled' : 'disabled'}`);
+      Logger.info('SERVER', `RAG service: ${config.enableRag ? 'enabled' : 'disabled'}`);
+      if (config.enableRag) {
+        Logger.info('SERVER', `  KB ID: ${config.ragBedrockKbId || 'NOT CONFIGURED'}`);
+        Logger.info('SERVER', `  AWS Region: ${config.ragAwsRegion}`);
+        Logger.info('SERVER', `  Max Results: ${config.ragMaxResults}`);
+      }
 
       if (config.anthropicApiKey) {
         Logger.info('SERVER', '🔑 Anthropic API key: configured');

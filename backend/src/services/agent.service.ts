@@ -7,7 +7,7 @@ import fs from 'fs/promises';
 
 // Enhanced streaming callback to handle all event types
 export interface StreamEvent {
-  type: 'content_delta' | 'thinking' | 'tool_use' | 'tool_result' | 'status' | 'error' | 'message_complete' | 'file_created' | 'raw_message' | 'metrics' | 'assistant_meta';
+  type: 'content_delta' | 'thinking' | 'tool_use' | 'tool_result' | 'status' | 'error' | 'message_complete' | 'file_created' | 'raw_message' | 'metrics' | 'assistant_meta' | 'rag_status';
   delta?: string;
   thinking?: string;
   toolName?: string;
@@ -42,6 +42,13 @@ export interface StreamEvent {
       cacheCreationInputTokens?: number;
       cacheReadInputTokens?: number;
     };
+  };
+  // RAG-specific fields
+  ragData?: {
+    subQueries?: string[];
+    sources?: string[];
+    totalResults?: number;
+    processingTime?: number;
   };
 }
 
@@ -110,9 +117,43 @@ export class ClaudeAgentService {
     // Initialize artifact directory if needed
     await ArtifactService.initialize();
 
+    // Augment message with RAG context if enabled
+    let augmentedMessage = userMessage;
+    if (config.enableRag) {
+      try {
+        onStream({
+          type: 'status',
+          status: 'Retrieving relevant context from knowledge base...',
+        });
+
+        const { RAGService } = await import('./rag.service.js');
+        await RAGService.initialize();
+
+        augmentedMessage = await RAGService.augmentPrompt(userMessage, (ragEvent) => {
+          // Stream RAG progress to frontend
+          onStream({
+            type: 'rag_status',
+            status: ragEvent.message,
+            ragData: ragEvent.data,
+          });
+        });
+
+        Logger.info('AGENT', 'Message augmented with RAG context', {
+          originalLength: userMessage.length,
+          augmentedLength: augmentedMessage.length,
+        }, { sessionId, userId });
+      } catch (error) {
+        Logger.error('AGENT', 'RAG augmentation failed, proceeding without context', error);
+        onStream({
+          type: 'status',
+          status: 'RAG retrieval failed, proceeding without context',
+        });
+      }
+    }
+
     // Use Claude Agent SDK with full tool access and EXTENDED THINKING
     const response = query({
-      prompt: userMessage,
+      prompt: augmentedMessage,
       options: {
         resume: sessionId, // SDK loads history automatically
         model: 'claude-sonnet-4-5',

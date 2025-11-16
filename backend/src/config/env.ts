@@ -17,6 +17,14 @@ export const config = {
 
   // Feature Flags
   enableArtifactsStorage: process.env.ENABLE_ARTIFACTS_STORAGE !== 'false', // default true
+  enableRag: process.env.ENABLE_RAG === 'true', // default false
+
+  // RAG Configuration
+  ragBedrockKbId: process.env.RAG_BEDROCK_KB_ID || '',
+  ragAwsRegion: process.env.RAG_AWS_REGION || 'us-east-1',
+  ragMaxResults: parseInt(process.env.RAG_MAX_RESULTS || '10', 10),
+  ragMaxDecompositionQueries: parseInt(process.env.RAG_MAX_DECOMPOSITION_QUERIES || '5', 10),
+  ragMinRelevanceScore: parseFloat(process.env.RAG_MIN_RELEVANCE_SCORE || '0.5'),
 } as const;
 
 // Validate required config
