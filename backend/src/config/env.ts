@@ -14,6 +14,9 @@ export const config = {
   dataDir: process.env.DATA_DIR || path.join(process.cwd(), 'data'),
   agentOutputDir: process.env.AGENT_OUTPUT_DIR || path.join(process.cwd(), 'agent-output'),
   frontendUrl: process.env.FRONTEND_URL || 'http://localhost:5173',
+
+  // Feature Flags
+  enableArtifactsStorage: process.env.ENABLE_ARTIFACTS_STORAGE !== 'false', // default true
 } as const;
 
 // Validate required config

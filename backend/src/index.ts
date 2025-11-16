@@ -60,13 +60,18 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
-// Initialize artifact service
-Logger.info('SERVER', 'Initializing artifact service', { outputDir: config.agentOutputDir });
-await ArtifactService.initialize();
+// Initialize artifact service (conditionally based on config)
+if (config.enableArtifactsStorage) {
+  Logger.info('SERVER', 'Initializing artifact service', { outputDir: config.agentOutputDir });
+  await ArtifactService.initialize();
+  app.use('/api', artifactRoutes);
+  Logger.info('SERVER', 'Artifacts storage: ENABLED');
+} else {
+  Logger.info('SERVER', 'Artifacts storage: DISABLED');
+}
 
 // Register routes
 app.use('/api', chatRoutes);
-app.use('/api', artifactRoutes);
 
 // Error handling middleware
 app.use((err: Error, req: express.Request, res: express.Response, _next: express.NextFunction) => {
@@ -93,6 +98,7 @@ const start = async () => {
       Logger.info('SERVER', `Node version: ${process.version}`);
       Logger.info('SERVER', `Agent output: ${config.agentOutputDir}`);
       Logger.info('SERVER', `Data directory: ${config.dataDir}`);
+      Logger.info('SERVER', `Artifacts storage: ${config.enableArtifactsStorage ? 'enabled' : 'disabled'}`);
 
       if (config.anthropicApiKey) {
         Logger.info('SERVER', '🔑 Anthropic API key: configured');
