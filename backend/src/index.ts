@@ -2,8 +2,6 @@ import express from 'express';
 import cors from 'cors';
 import { config } from './config/env.js';
 import { chatRoutes } from './routes/chat.routes.js';
-import { artifactRoutes } from './routes/artifact.routes.js';
-import { ArtifactService } from './services/artifact.service.js';
 import { Logger } from './services/logger.service.js';
 
 const app = express();
@@ -63,6 +61,8 @@ app.get('/api/health', (_req, res) => {
 // Initialize artifact service (conditionally based on config)
 if (config.enableArtifactsStorage) {
   Logger.info('SERVER', 'Initializing artifact service', { outputDir: config.agentOutputDir });
+  const { ArtifactService } = await import('./services/artifact.service.js');
+  const { artifactRoutes } = await import('./routes/artifact.routes.js');
   await ArtifactService.initialize();
   app.use('/api', artifactRoutes);
   Logger.info('SERVER', 'Artifacts storage: ENABLED');
