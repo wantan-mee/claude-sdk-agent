@@ -2,6 +2,7 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import { config } from '../config/env.js';
 import { ArtifactService } from './artifact.service.js';
 import { Logger } from './logger.service.js';
+import { jiraToolsServer } from './jira.tools.js';
 import path from 'path';
 import fs from 'fs/promises';
 
@@ -73,6 +74,11 @@ export class ClaudeAgentService {
       'search': '🔎 Searching',
       'grep': '🔍 Searching content',
 
+      // Jira tools
+      'mcp__jira-tools__jira_search': '🎫 Searching Jira issues',
+      'mcp__jira-tools__jira_get_issue': '🎫 Getting Jira issue',
+      'mcp__jira-tools__jira_create_issue': '🎫 Creating Jira issue',
+
       // Default
       'unknown': '🛠️ Using tool',
     };
@@ -110,6 +116,14 @@ export class ClaudeAgentService {
     // Initialize artifact directory if needed
     await ArtifactService.initialize();
 
+    // Check if Jira is configured
+    const isJiraConfigured = !!(config.jiraHost && config.jiraEmail && config.jiraApiToken);
+    if (isJiraConfigured) {
+      Logger.info('AGENT', 'Jira tools enabled', {
+        host: config.jiraHost
+      }, { sessionId, userId });
+    }
+
     // Use Claude Agent SDK with full tool access and EXTENDED THINKING
     const response = query({
       prompt: userMessage,
@@ -125,6 +139,13 @@ export class ClaudeAgentService {
 
         // Enable all tools (web search, file operations, bash, etc.)
         permissionMode: 'bypassPermissions', // Allow all operations without prompting
+
+        // Register custom MCP servers (e.g., Jira tools)
+        ...(isJiraConfigured && {
+          mcpServers: {
+            'jira-tools': jiraToolsServer
+          }
+        }),
 
         // System prompt encouraging deep reasoning
         systemPrompt: {
@@ -143,7 +164,7 @@ For knowledge base searches:
 - Start with broad queries to understand the domain
 - Follow up with specific queries for details
 - Search 3-5 times if needed to get complete context
-- Always cite which documents inform your answer`
+- Always cite which documents inform your answer${isJiraConfigured ? '\n\nYou have access to Jira tools:\n- mcp__jira-tools__jira_search: Search Jira issues using JQL\n- mcp__jira-tools__jira_get_issue: Get details of a specific issue\n- mcp__jira-tools__jira_create_issue: Create new Jira issues' : ''}`
         }
       },
     });
