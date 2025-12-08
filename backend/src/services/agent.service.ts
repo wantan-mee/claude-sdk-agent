@@ -3,6 +3,7 @@ import { config } from '../config/env.js';
 import { ArtifactService } from './artifact.service.js';
 import { Logger } from './logger.service.js';
 import { jiraToolsServer } from './jira.tools.js';
+import { confluenceToolsServer } from './confluence.tools.js';
 import path from 'path';
 import fs from 'fs/promises';
 
@@ -79,6 +80,11 @@ export class ClaudeAgentService {
       'mcp__jira-tools__jira_get_issue': '🎫 Getting Jira issue',
       'mcp__jira-tools__jira_create_issue': '🎫 Creating Jira issue',
 
+      // Confluence tools
+      'mcp__confluence-tools__confluence_search': '📚 Searching Confluence pages',
+      'mcp__confluence-tools__confluence_get_page': '📚 Getting Confluence page',
+      'mcp__confluence-tools__confluence_list_spaces': '📚 Listing Confluence spaces',
+
       // Default
       'unknown': '🛠️ Using tool',
     };
@@ -124,6 +130,14 @@ export class ClaudeAgentService {
       }, { sessionId, userId });
     }
 
+    // Check if Confluence is configured
+    const isConfluenceConfigured = !!(config.confluenceHost && config.confluenceEmail && config.confluenceApiToken);
+    if (isConfluenceConfigured) {
+      Logger.info('AGENT', 'Confluence tools enabled', {
+        host: config.confluenceHost
+      }, { sessionId, userId });
+    }
+
     // Use Claude Agent SDK with full tool access and EXTENDED THINKING
     const response = query({
       prompt: userMessage,
@@ -140,10 +154,11 @@ export class ClaudeAgentService {
         // Enable all tools (web search, file operations, bash, etc.)
         permissionMode: 'bypassPermissions', // Allow all operations without prompting
 
-        // Register custom MCP servers (e.g., Jira tools)
-        ...(isJiraConfigured && {
+        // Register custom MCP servers (Jira and Confluence tools)
+        ...((isJiraConfigured || isConfluenceConfigured) && {
           mcpServers: {
-            'jira-tools': jiraToolsServer
+            ...(isJiraConfigured && { 'jira-tools': jiraToolsServer }),
+            ...(isConfluenceConfigured && { 'confluence-tools': confluenceToolsServer })
           }
         }),
 
@@ -164,7 +179,7 @@ For knowledge base searches:
 - Start with broad queries to understand the domain
 - Follow up with specific queries for details
 - Search 3-5 times if needed to get complete context
-- Always cite which documents inform your answer${isJiraConfigured ? '\n\nYou have access to Jira tools:\n- mcp__jira-tools__jira_search: Search Jira issues using JQL\n- mcp__jira-tools__jira_get_issue: Get details of a specific issue\n- mcp__jira-tools__jira_create_issue: Create new Jira issues' : ''}`
+- Always cite which documents inform your answer${isJiraConfigured ? '\n\nYou have access to Jira tools:\n- mcp__jira-tools__jira_search: Search Jira issues using JQL\n- mcp__jira-tools__jira_get_issue: Get details of a specific issue\n- mcp__jira-tools__jira_create_issue: Create new Jira issues' : ''}${isConfluenceConfigured ? '\n\nYou have access to Confluence tools:\n- mcp__confluence-tools__confluence_search: Search Confluence pages using CQL\n- mcp__confluence-tools__confluence_get_page: Get page content by ID or title\n- mcp__confluence-tools__confluence_list_spaces: List available Confluence spaces' : ''}`
         }
       },
     });
