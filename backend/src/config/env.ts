@@ -24,6 +24,12 @@ export const config = {
   confluenceHost: process.env.CONFLUENCE_HOST || '',
   confluenceEmail: process.env.CONFLUENCE_EMAIL || '',
   confluenceApiToken: process.env.CONFLUENCE_API_TOKEN || '',
+
+  // AWS Bedrock Knowledge Base Integration (optional)
+  awsAccessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
+  awsSecretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '',
+  awsRegion: process.env.AWS_REGION || '',
+  awsKnowledgeBaseId: process.env.AWS_KNOWLEDGE_BASE_ID || '',
 } as const;
 
 // Validate required config
@@ -43,4 +49,11 @@ if (config.confluenceHost && (!config.confluenceEmail || !config.confluenceApiTo
   console.warn('⚠️  CONFLUENCE_HOST is set but CONFLUENCE_EMAIL or CONFLUENCE_API_TOKEN is missing. Confluence tools will not work properly.');
 } else if (config.confluenceHost && config.confluenceEmail && config.confluenceApiToken) {
   console.log('✅ Confluence integration configured');
+}
+
+// Optional AWS Bedrock Knowledge Base configuration validation
+if (config.awsKnowledgeBaseId && (!config.awsAccessKeyId || !config.awsSecretAccessKey || !config.awsRegion)) {
+  console.warn('⚠️  AWS_KNOWLEDGE_BASE_ID is set but AWS credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION) are missing. Bedrock KB tools will not work properly.');
+} else if (config.awsKnowledgeBaseId && config.awsAccessKeyId && config.awsSecretAccessKey && config.awsRegion) {
+  console.log('✅ AWS Bedrock Knowledge Base integration configured');
 }
